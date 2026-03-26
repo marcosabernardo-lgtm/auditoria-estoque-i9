@@ -191,7 +191,7 @@ def buscar_movimentacoes_nuvem(engine, produto_cod):
 
     try:
         query = text(
-            "SELECT * FROM movimentacoes WHERE PRODUTO = :p ORDER BY DIGITACAO DESC"
+            'SELECT * FROM movimentacoes WHERE "PRODUTO" = :p ORDER BY "DIGITACAO" DESC'
         )
         return pd.read_sql(query, engine, params={"p": produto_cod})
     except Exception as exc:
