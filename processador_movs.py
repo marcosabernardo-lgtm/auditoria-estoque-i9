@@ -196,17 +196,20 @@ def tratar_notas_fiscais(list_files):
 
 def buscar_movimentacoes_nuvem(engine, produto_cod):
     """
-    CORREÇÃO #3: exceções explícitas — distingue erro de conexão de ausência
-    de dados e propaga a mensagem correta para a camada de apresentação.
+    Busca movimentações pelo código do produto.
+    Usa LIKE '%<codigo>' para ser agnóstico ao zero-fill aplicado na gravação,
+    evitando divergência entre o valor digitado e o armazenado no banco.
     """
     if engine is None:
         raise ConnectionError("Engine não inicializada. Verifique a conexão com o banco.")
 
+    # Remove zeros à esquerda do input para montar o sufixo de busca
+    codigo_limpo = str(produto_cod).strip().lstrip("0") or "0"
+
     try:
         query = text(
-            'SELECT * FROM movimentacoes WHERE "PRODUTO" = :p ORDER BY "DIGITACAO" DESC'
+            'SELECT * FROM movimentacoes WHERE "PRODUTO" LIKE :p ORDER BY "DIGITACAO" DESC'
         )
-        return pd.read_sql(query, engine, params={"p": produto_cod})
+        return pd.read_sql(query, engine, params={"p": f"%{codigo_limpo}"})
     except Exception as exc:
-        # Re-lança com contexto para que app.py possa exibir mensagem útil
         raise RuntimeError(f"Erro ao consultar movimentações para '{produto_cod}': {exc}") from exc
