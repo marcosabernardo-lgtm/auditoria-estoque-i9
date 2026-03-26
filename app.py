@@ -8,6 +8,7 @@ from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, r
 
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 
+# CSS para os Cards e Radios
 st.markdown("""
     <style>
     div[data-testid="stMetric"] { border: 1px solid #464b5d; padding: 20px; border-radius: 12px; background-color: #0e1117; box-shadow: 2px 2px 10px rgba(0,0,0,0.2); }
@@ -19,8 +20,6 @@ st.markdown("""
 def get_engine():
     try:
         conn_url = st.secrets["connections"]["postgresql"]["url"]
-        if conn_url.startswith("postgres://"):
-            conn_url = conn_url.replace("postgres://", "postgresql://", 1)
         return create_engine(conn_url, connect_args={"options": "-c fts.prepare_threshold=0"})
     except: return None
 
@@ -28,7 +27,7 @@ def salvar_no_banco(df, tabela):
     engine = get_engine()
     if engine is not None and not df.empty:
         try:
-            # Envio otimizado
+            # Envio em blocos
             df.to_sql(tabela, engine, if_exists='replace', index=False, chunksize=5000)
             return True
         except Exception as e:
@@ -101,8 +100,8 @@ df_base = carregar_do_banco('auditoria')
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
     with st.expander("1. Auditoria (WMS/ERP)"):
-        u_wms = st.file_uploader("WMS (Localizações)", type=["xlsx"])
-        u_erp = st.file_uploader("ERP (Estoque)", type=["xlsx"])
+        u_wms = st.file_uploader("Upload WMS", type=["xlsx"])
+        u_erp = st.file_uploader("Upload ERP", type=["xlsx"])
         if u_wms and u_erp and st.button("🚀 Enviar Auditoria"):
             df_aud = processar_auditoria(u_wms, u_erp)
             if salvar_no_banco(df_aud, 'auditoria'):
@@ -117,8 +116,8 @@ with st.sidebar:
                 if not df_nf.empty:
                     if salvar_no_banco(df_nf, 'movimentacoes'):
                         st.success(f"{len(df_nf)} registros enviados!")
-                else:
-                    st.error("Nenhuma nota válida encontrada nos arquivos.")
+                    else: st.error("Erro ao salvar no banco.")
+                else: st.error("Nenhuma nota válida encontrada.")
 
 if df_base is not None:
     st.write("### 🛠️ Filtros de Seleção")
@@ -164,9 +163,9 @@ if df_base is not None:
         if f_code and len(f_code) >= 3:
             df_nf_res = buscar_movimentacoes_nuvem(get_engine(), f_code)
             if not df_nf_res.empty:
-                st.write(f"Últimas Notas do Produto: **{f_code}**")
-                # Formatar data para exibição
-                df_nf_res['DIGITACAO'] = df_nf_res['DIGITACAO'].dt.strftime('%d/%m/%Y')
+                st.write(f"Últimas Movimentações do Produto: **{f_code}**")
+                # Garante que DIGITACAO seja exibida como data
+                df_nf_res['DIGITACAO'] = pd.to_datetime(df_nf_res['DIGITACAO']).dt.strftime('%d/%m/%Y')
                 st.dataframe(df_nf_res, use_container_width=True)
             else: st.warning("Nenhuma nota no histórico.")
         else: st.info("Digite o código no campo de busca para ver o histórico.")
