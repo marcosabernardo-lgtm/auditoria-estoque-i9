@@ -383,13 +383,26 @@ if df_base is not None:
     tab1, tab2, tab3 = st.tabs(["📄 Consulta Auditoria", "📈 Indicadores", "🚚 Entradas e Saídas"])
 
     with tab1:
+        # Renomeia C Unitario -> Vl Unit e reposiciona após Descrição
+        dff_view = dff.rename(columns={"C Unitario": "Vl Unit"})
+        col_order = [c for c in dff_view.columns if c != "Vl Unit"]
+        if "Descrição" in col_order:
+            idx = col_order.index("Descrição") + 1
+            col_order.insert(idx, "Vl Unit")
+        else:
+            col_order.append("Vl Unit")
+        dff_view = dff_view[col_order]
+
         st.dataframe(
-            dff.style.format(
+            dff_view.style.format(
                 {
-                    "Saldo ERP (Total)": "{:,.0f}",
-                    "C Unitario": "R$ {:,.4f}",
-                    "Vl Divergência": "R$ {:,.2f}",
-                    "Vl Total ERP": "R$ {:,.2f}",
+                    "Saldo ERP (Total)"   : "{:,.2f}",
+                    "Saldo ERP (Rateado)" : "{:,.2f}",
+                    "Vl Unit"             : "R$ {:,.2f}",
+                    "Saldo WMS"           : "{:,.2f}",
+                    "Divergência"         : "{:,.2f}",
+                    "Vl Divergência"      : "R$ {:,.2f}",
+                    "Vl Total ERP"        : "R$ {:,.2f}",
                 },
                 decimal=",",
                 thousands=".",
@@ -453,7 +466,23 @@ if df_base is not None:
                         "PRECO_UNITARIO" : "Vl Unit",
                         "TOTAL"          : "Vl Total",
                     })
-                    st.dataframe(df_nf_res, use_container_width=True)
+                    # Formata valores monetários
+                    fmt = {}
+                    if "Vl Unit" in df_nf_res.columns:
+                        # Converte string BR para float antes de formatar
+                        for col in ["Vl Unit", "Vl Total"]:
+                            if col in df_nf_res.columns:
+                                df_nf_res[col] = (
+                                    df_nf_res[col].astype(str)
+                                    .str.replace(".", "", regex=False)
+                                    .str.replace(",", ".", regex=False)
+                                )
+                                df_nf_res[col] = pd.to_numeric(df_nf_res[col], errors="coerce")
+                                fmt[col] = "R$ {:,.2f}"
+                    st.dataframe(
+                        df_nf_res.style.format(fmt, decimal=",", thousands="."),
+                        use_container_width=True,
+                    )
                 else:
                     st.warning("Nenhuma movimentação encontrada para este produto.")
             except ConnectionError as exc:
