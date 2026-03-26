@@ -15,9 +15,11 @@ def get_engine():
         conn_url = st.secrets["connections"]["postgresql"]["url"]
         if conn_url.startswith("postgres://"):
             conn_url = conn_url.replace("postgres://", "postgresql://", 1)
-        return create_engine(conn_url)
-    except:
-        st.error("Erro: Configuração de Banco de Dados não encontrada nos Secrets.")
+        
+        # Adicionamos esse argumento para evitar erros com o Pooler do Supabase
+        return create_engine(conn_url, connect_args={"options": "-c fts.prepare_threshold=0"})
+    except Exception as e:
+        st.error(f"Erro na configuração: {e}")
         return None
 
 def salvar_no_banco(df):
