@@ -431,10 +431,27 @@ if df_base is not None:
                     df_nf_res["DIGITACAO"] = pd.to_datetime(
                         df_nf_res["DIGITACAO"]
                     ).dt.strftime("%d/%m/%Y")
-                    # Renomeia colunas para exibição amigável
+
+                    # Separa Empresa_Filial_Nome em duas colunas: Empresa e Filial
+                    if "Empresa_Filial_Nome" in df_nf_res.columns:
+                        split = df_nf_res["Empresa_Filial_Nome"].str.split(" - ", n=1, expand=True)
+                        df_nf_res.insert(0, "Filial", split[1].fillna(""))
+                        df_nf_res.insert(0, "Empresa", split[0].fillna(""))
+                        df_nf_res = df_nf_res.drop(columns=["Empresa_Filial_Nome"])
+
+                    # Renomeia e formata cabeçalhos para exibição
                     df_nf_res = df_nf_res.rename(columns={
-                        "Empresa_Filial_Nome": "EMPRESA / FILIAL",
-                        "TIPOMOVIMENTO": "TIPO MOVIMENTO",
+                        "TIPOMOVIMENTO"  : "Tipo Movimento",
+                        "DOCUMENTO"      : "Documento",
+                        "DIGITACAO"      : "Digitação",
+                        "NOTA_DEVOLUCAO" : "Nota Devolução",
+                        "PRODUTO"        : "Produto",
+                        "DESCRICAO"      : "Descrição",
+                        "CENTRO_CUSTO"   : "Centro Custo",
+                        "RAZAO_SOCIAL"   : "Razão Social",
+                        "QUANTIDADE"     : "Qtd",
+                        "PRECO_UNITARIO" : "Vl Unit",
+                        "TOTAL"          : "Vl Total",
                     })
                     st.dataframe(df_nf_res, use_container_width=True)
                 else:
