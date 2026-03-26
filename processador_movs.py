@@ -161,8 +161,6 @@ def tratar_notas_fiscais(list_files):
             cols_ausentes,
         )
 
-    df_reduzido = df_reduzido[cols_presentes]
-
     # Padroniza DOCUMENTO com zero-fill (9 digitos) para nao perder zeros a esquerda
     if "DOCUMENTO" in df_reduzido.columns:
         df_reduzido["DOCUMENTO"] = (
@@ -173,7 +171,7 @@ def tratar_notas_fiscais(list_files):
             .str.zfill(9)
         )
 
-    # Join com nomes de filiais (EMPRESA_ARQUIVO e FILIAL usados so para chave)
+    # Join com nomes de filiais — EMPRESA_ARQUIVO e FILIAL precisam existir aqui
     df_reduzido["CHAVE_JOIN"] = df_reduzido["EMPRESA_ARQUIVO"] + " " + df_reduzido["FILIAL"]
     df_reduzido = pd.merge(
         df_reduzido,
@@ -182,13 +180,14 @@ def tratar_notas_fiscais(list_files):
         right_on="Empresa_Cod_Filial",
         how="left",
     )
+    # Remove colunas auxiliares e as originais de empresa/filial (substituidas por Empresa_Filial_Nome)
     df_reduzido = df_reduzido.drop(columns=["CHAVE_JOIN", "Empresa_Cod_Filial", "EMPRESA_ARQUIVO", "FILIAL"])
 
-    # Empresa_Filial_Nome como primeira coluna, TIPOMOVIMENTO como segunda
-    col_order = ["Empresa_Filial_Nome", "TIPOMOVIMENTO"] + [
-        c for c in df_reduzido.columns if c not in ("Empresa_Filial_Nome", "TIPOMOVIMENTO")
+    # Seleciona apenas as colunas finais esperadas + Empresa_Filial_Nome
+    cols_exibir = ["Empresa_Filial_Nome", "TIPOMOVIMENTO"] + [
+        c for c in cols_presentes if c not in ("EMPRESA_ARQUIVO", "FILIAL", "TIPOMOVIMENTO")
     ]
-    return df_reduzido[[c for c in col_order if c in df_reduzido.columns]]
+    return df_reduzido[[c for c in cols_exibir if c in df_reduzido.columns]]
 
 
 # ---------------------------------------------------------------------------
