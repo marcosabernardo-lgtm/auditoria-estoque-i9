@@ -402,6 +402,11 @@ if df_base is not None:
                     df_nf_res["DIGITACAO"] = pd.to_datetime(
                         df_nf_res["DIGITACAO"]
                     ).dt.strftime("%d/%m/%Y")
+                    # Renomeia colunas para exibição amigável
+                    df_nf_res = df_nf_res.rename(columns={
+                        "Empresa_Filial_Nome": "EMPRESA / FILIAL",
+                        "TIPOMOVIMENTO": "TIPO MOVIMENTO",
+                    })
                     st.dataframe(df_nf_res, use_container_width=True)
                 else:
                     st.warning("Nenhuma movimentação encontrada para este produto.")
