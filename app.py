@@ -4,38 +4,68 @@ import numpy as np
 import io
 import os
 from sqlalchemy import create_engine
+# Importa as funções do arquivo de motor que criamos
 from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
 
-# Configuração
-st.set_page_config(page_title="Gestão I9 - Premium", layout="wide")
+# 1. CONFIGURAÇÃO DA PÁGINA
+st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 
-# CSS para os Cards
+# --- CSS PARA ESTILIZAÇÃO (Cards com bordas e Radios horizontais) ---
 st.markdown("""
     <style>
-    div[data-testid="stMetric"] { border: 1px solid #464b5d; padding: 20px; border-radius: 12px; background-color: #0e1117; box-shadow: 2px 2px 10px rgba(0,0,0,0.2); }
-    div[data-testid="stRadio"] > div { flex-direction: row; border: 1px solid #464b5d; padding: 5px 15px; border-radius: 15px; background-color: #0e1117; overflow-x: auto; }
-    div[data-testid="stRadio"] label { margin-right: 15px; white-space: nowrap; }
+    /* Estilização dos Cards (Métricas) */
+    div[data-testid="stMetric"] {
+        border: 1px solid #464b5d;
+        padding: 20px;
+        border-radius: 12px;
+        background-color: #0e1117;
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.2);
+    }
+    
+    /* Moldura nos filtros de rádio (bolinha flegar) */
+    div[data-testid="stRadio"] > div {
+        flex-direction: row;
+        border: 1px solid #464b5d;
+        padding: 5px 15px;
+        border-radius: 15px;
+        background-color: #0e1117;
+        overflow-x: auto;
+    }
+    
+    div[data-testid="stRadio"] label {
+        margin-right: 15px;
+        white-space: nowrap;
+    }
+
+    .block-container { padding-top: 1.5rem; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO BANCO ---
+# 2. FUNÇÕES DE BANCO DE DADOS (OTIMIZADAS)
 def get_engine():
     try:
         conn_url = st.secrets["connections"]["postgresql"]["url"]
+        if conn_url.startswith("postgres://"):
+            conn_url = conn_url.replace("postgres://", "postgresql://", 1)
         return create_engine(conn_url, connect_args={"options": "-c fts.prepare_threshold=0"})
     except: return None
 
 def salvar_no_banco(df, tabela):
     engine = get_engine()
     if engine is not None:
-        df.to_sql(tabela, engine, if_exists='replace', index=False)
-        return True
+        try:
+            # Envio em blocos para ser mais rápido
+            df.to_sql(tabela, engine, if_exists='replace', index=False, chunksize=10000, method='multi')
+            return True
+        except Exception as e:
+            st.error(f"Erro ao salvar: {e}")
+            return False
     return False
 
-def carregar_do_banco(tabela):
+def carregar_auditoria():
     engine = get_engine()
     if engine is not None:
-        try: return pd.read_sql(f'SELECT * FROM {tabela}', engine)
+        try: return pd.read_sql('SELECT * FROM auditoria', engine)
         except: return None
     return None
 
@@ -46,14 +76,19 @@ def formatar_br(valor):
 def processar_auditoria(file_wms, file_estoque):
     df_ref = get_df_empresas().rename(columns={'Empresa_Cod_Filial':'ID_Empresa_Ref', 'Empresa_Filial_Nome':'Nome_Filial_Completo'})
     
-    # Processar WMS
+    # WMS
     df_loc = pd.read_excel(file_wms)
     df_loc.columns = [str(c).strip() for c in df_loc.columns]
-    df_loc = df_loc[df_loc['Utilizado'] > 0].copy()
+    if 'Utilizado' in df_loc.columns:
+        df_loc = df_loc[df_loc['Utilizado'] > 0].copy()
+    
     col_wms_emp = [c for c in df_loc.columns if "Empresa" in c and "Filial" in c][0]
     df_loc['Aba_Ref'] = df_loc[col_wms_emp].str.extract(r'-(.*?) -', expand=False).str.strip().apply(remover_acentos)
+    
+    # Regra Tools A02 -> A20
     mask_tools_a02 = (df_loc['Aba_Ref'] == "Tools") & (df_loc['Localização'].str.startswith("A02", na=False))
     df_loc.loc[mask_tools_a02, 'Localização'] = df_loc.loc[mask_tools_a02, 'Localização'].str.replace("A02", "A20", 1)
+    
     df_loc['Num_Filial_WMS'] = df_loc[col_wms_emp].str.extract(r'^(\d+)', expand=False).str.strip().str.slice(-2)
     df_loc['ID_Empresa_Ref'] = df_loc['Aba_Ref'] + " " + df_loc['Num_Filial_WMS']
     df_loc = pd.merge(df_loc, df_ref, on='ID_Empresa_Ref', how='inner')
@@ -62,7 +97,7 @@ def processar_auditoria(file_wms, file_estoque):
     df_loc['ID_Cruzamento'] = df_loc['ID_Empresa_Ref'] + "-" + df_loc['Armazem_WMS'] + "-" + df_loc['Produto_WMS']
     df_loc_resumo = df_loc[['ID_Cruzamento', 'Localização', 'Utilizado']].rename(columns={'Utilizado': 'Saldo WMS'})
 
-    # Processar ERP
+    # ERP
     dict_abas = pd.read_excel(file_estoque, sheet_name=None)
     lista_dfs = []
     categorias_validas = ["Tools", "Service", "Maquinas", "Robotica"]
@@ -95,16 +130,16 @@ def processar_auditoria(file_wms, file_estoque):
     
     return df_final[['Status', 'Aba_Ref', 'Nome_Filial_Completo', 'Localização', 'Armazem_ERP', 'Produto_ERP', 'Descrição', 'Total_ERP', 'Saldo ERP (Rateado)', 'C Unitario', 'Saldo WMS', 'Divergência', 'Vl Divergência', 'Vl Total ERP']].rename(columns={'Aba_Ref': 'Empresa', 'Nome_Filial_Completo': 'Filial', 'Armazem_ERP': 'Armazem', 'Produto_ERP': 'Produto', 'Total_ERP': 'Saldo ERP (Total)'})
 
-# --- INTERFACE ---
-st.title("📊 Gestão Integrada de Estoque I9")
+# 3. INTERFACE PRINCIPAL
+st.title("📊 Gestão de Estoque I9 - Online")
 
-df_base = carregar_do_banco('auditoria')
+df_base = carregar_auditoria()
 
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
     with st.expander("1. Auditoria (WMS/ERP)"):
-        u_wms = st.file_uploader("WMS (Localizações)", type=["xlsx"])
-        u_erp = st.file_uploader("ERP (Estoque)", type=["xlsx"])
+        u_wms = st.file_uploader("Upload WMS", type=["xlsx"])
+        u_erp = st.file_uploader("Upload ERP", type=["xlsx"])
         if u_wms and u_erp and st.button("🚀 Enviar Auditoria"):
             df_aud = processar_auditoria(u_wms, u_erp)
             if salvar_no_banco(df_aud, 'auditoria'):
@@ -112,15 +147,16 @@ with st.sidebar:
                 st.rerun()
 
     with st.expander("2. Movimentações (Notas Fiscais)"):
-        u_movs = st.file_uploader("Arquivos da pasta bd_entradas", type=["xlsx"], accept_multiple_files=True)
+        u_movs = st.file_uploader("Arquivos bd_entradas", type=["xlsx"], accept_multiple_files=True)
         if u_movs and st.button("📦 Enviar Notas Fiscais"):
-            df_nf = tratar_notas_fiscais(u_movs)
-            if salvar_no_banco(df_nf, 'movimentacoes'):
-                st.success(f"{len(df_nf)} notas enviadas!")
+            with st.spinner("Processando (Filtrando últimas movimentações)..."):
+                df_nf = tratar_notas_fiscais(u_movs)
+                if salvar_no_banco(df_nf, 'movimentacoes'):
+                    st.success(f"{len(df_nf)} notas enviadas!")
 
 if df_base is not None:
-    # FILTROS
-    st.write("### 🛠️ Filtros Globais")
+    # FILTROS GLOBAIS EM UMA LINHA
+    st.write("### 🛠️ Filtros de Seleção")
     c1, c2, c3 = st.columns(3)
     with c1: f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base['Empresa'].unique().tolist()), horizontal=True)
     df_t1 = df_base if f_emp == "Todas" else df_base[df_base['Empresa'] == f_emp]
@@ -129,33 +165,51 @@ if df_base is not None:
     with c3: f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
     
     dff_parcial = df_t2 if f_stat == "Todos" else df_t2[df_t2['Status'] == f_stat]
-    f_code = st.text_input("🔍 CONSULTA POR CÓDIGO", placeholder="Ex: 001262")
+    
+    # Campo de busca logo abaixo dos filtros
+    f_code = st.text_input("🔍 CONSULTA POR CÓDIGO", placeholder="Digite o código (ex: 001262)")
     
     dff = dff_parcial.copy()
     if f_code: dff = dff[dff['Produto'].astype(str).str.contains(f_code, na=False)]
 
-    tab1, tab2, tab3 = st.tabs(["📄 Consulta Auditoria", "📈 Indicadores", "🚚 Entradas e Saídas"])
+    # CRIAÇÃO DAS ABAS
+    tab1, tab2, tab3 = st.tabs(["📄 Consulta Planilha", "📈 Indicadores", "🚚 Entradas e Saídas"])
 
     with tab1:
         st.dataframe(dff.style.format({'Saldo ERP (Total)': '{:,.0f}', 'C Unitario': 'R$ {:,.4f}', 'Vl Divergência': 'R$ {:,.2f}', 'Vl Total ERP': 'R$ {:,.2f}'}, decimal=',', thousands='.'), use_container_width=True)
 
     with tab2:
+        # Cálculos Financeiros
         v_total = dff['Vl Total ERP'].sum()
         v_div = dff['Vl Divergência'].sum()
-        ac_v = (1 - (dff['Vl Divergência'].abs().sum() / v_total)) * 100 if v_total > 0 else 0
-        st.markdown("#### Indicadores Financeiros")
+        v_err_abs = dff['Vl Divergência'].abs().sum()
+        ac_v = (1 - (v_err_abs / v_total)) * 100 if v_total > 0 else 0
+        
+        # Cálculos de Quantidade (ITENS ÚNICOS)
+        df_unq = dff.drop_duplicates(subset=['Empresa', 'Filial', 'Armazem', 'Produto'])
+        total_it = len(df_unq)
+        it_div = len(df_unq[df_unq['Status'] == "Divergente"])
+        ac_it = (1 - (it_div / total_it)) * 100 if total_it > 0 else 0
+
+        st.markdown("#### 💰 Indicadores Financeiros")
         k1, k2, k3 = st.columns(3)
         k1.metric("Valor em Estoque", f"R$ {formatar_br(v_total)}")
-        k2.metric("Impacto Divergente", f"R$ {formatar_br(v_div)}")
+        k2.metric("Valor Divergente", f"R$ {formatar_br(v_div)}")
         k3.metric("Acuracidade Valor", f"{ac_v:.2f}%")
+
+        st.markdown("#### 📦 Indicadores de Itens")
+        k4, k5, k6 = st.columns(3)
+        k4.metric("Total de Itens", f"{total_it:,}".replace(",", "."))
+        k5.metric("Itens Divergentes", f"{it_div:,}".replace(",", "."))
+        k6.metric("Acuracidade Itens", f"{ac_it:.2f}%")
 
     with tab3:
         if f_code and len(f_code) >= 3:
             df_nf_res = buscar_movimentacoes_nuvem(get_engine(), f_code)
             if not df_nf_res.empty:
-                st.write(f"Notas Fiscais do Produto: {f_code}")
+                st.write(f"Últimas movimentações (Entrada e Saída) do Produto: **{f_code}**")
                 st.dataframe(df_nf_res, use_container_width=True)
-            else: st.warning("Nenhuma nota encontrada.")
-        else: st.info("Digite o código acima para consultar as notas.")
+            else: st.warning("Nenhuma movimentação encontrada no histórico.")
+        else: st.info("Digite o código do produto na busca acima para consultar as notas.")
 else:
-    st.info("💡 Carregue os arquivos na lateral.")
+    st.info("💡 Carregue os arquivos na barra lateral para iniciar a auditoria.")
