@@ -31,58 +31,70 @@ def tratar_notas_fiscais(list_files):
     all_movs = []
 
     for file in list_files:
+        # Extrair nome da empresa do nome do arquivo (ex: 01_Tools.xlsx -> Tools)
         nome_arquivo = file.name.replace(".xlsx", "")
-        emp_origem = nome_arquivo.split("_")[-1] if "_" in nome_arquivo else nome_arquivo
+        partes = nome_arquivo.split("_")
+        emp_origem = partes[-1].strip() if len(partes) > 1 else nome_arquivo
         emp_origem = remover_acentos(emp_origem)
 
+        # Usar pd.ExcelFile para ler as abas sem re-abrir o arquivo toda hora
         xls = pd.ExcelFile(file)
         for sheet in xls.sheet_names:
-            if any(x in sheet.upper() for x in ["ENTRADA", "SAIDA"]):
-                df_temp = pd.read_excel(file, sheet_name=sheet)
+            aba_nome = sheet.upper().strip()
+            # Procura por abas que contenham ENTRADA ou SAIDA
+            if "ENTRADA" in aba_nome or "SAIDA" in aba_nome:
+                df_temp = pd.read_excel(xls, sheet_name=sheet)
+                
+                # Limpar cabeçalhos (remover espaços e colocar em maiúsculo)
                 df_temp.columns = [str(c).strip().upper() for c in df_temp.columns]
                 
-                if 'ESTOQUE' in df_temp.columns and 'QUANTIDADE' in df_temp.columns:
+                # Tratamento de Quantidade (converte string "10,00" para número 10.00)
+                if 'QUANTIDADE' in df_temp.columns:
+                    df_temp['QUANTIDADE'] = df_temp['QUANTIDADE'].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
                     df_temp['QUANTIDADE'] = pd.to_numeric(df_temp['QUANTIDADE'], errors='coerce').fillna(0)
+
+                # Filtros do Código M: ESTOQUE == 'S' e QUANTIDADE != 0
+                if 'ESTOQUE' in df_temp.columns and 'QUANTIDADE' in df_temp.columns:
+                    # Garante que 'S' não tenha espaços
+                    df_temp['ESTOQUE'] = df_temp['ESTOQUE'].astype(str).str.strip().upper()
                     df_temp = df_temp[(df_temp['ESTOQUE'] == 'S') & (df_temp['QUANTIDADE'] != 0)].copy()
                 
                 if not df_temp.empty:
-                    df_temp['TIPOMOVIMENTO'] = "Entrada" if "ENTRADA" in sheet.upper() else "Saída"
+                    df_temp['TIPOMOVIMENTO'] = "Entrada" if "ENTRADA" in aba_nome else "Saída"
                     df_temp['EMPRESA_ARQUIVO'] = emp_origem
+                    
+                    # Converter DIGITACAO para data real para podermos filtrar a última
+                    if 'DIGITACAO' in df_temp.columns:
+                        df_temp['DIGITACAO'] = pd.to_datetime(df_temp['DIGITACAO'], errors='coerce')
+                    
                     all_movs.append(df_temp)
 
-    if not all_movs: return pd.DataFrame()
+    if not all_movs:
+        return pd.DataFrame()
 
     df_final = pd.concat(all_movs, ignore_index=True)
     
-    # Padronização de colunas
-    df_final.columns = [c.strip().upper() for c in df_final.columns]
-    
-    # --- NOVA LÓGICA DE REDUÇÃO (ÚLTIMA ENTRADA E ÚLTIMA SAÍDA) ---
-    
-    # 1. Converter a coluna de data (DIGITACAO) para o formato de data real
-    df_final['DIGITACAO'] = pd.to_datetime(df_final['DIGITACAO'], errors='coerce')
-    
-    # 2. Limpar IDs para garantir que o agrupamento funcione
+    # --- LÓGICA DE REDUÇÃO: ÚLTIMA ENTRADA E ÚLTIMA SAÍDA ---
     df_final['PRODUTO'] = limpar_id_produto(df_final['PRODUTO'])
     df_final['FILIAL'] = limpar_id_geral(df_final['FILIAL'], 2)
     
-    # 3. Ordenar pela data (mais recente primeiro)
-    df_final = df_final.sort_values(by=['DIGITACAO'], ascending=False)
+    # Ordenar pela data (mais recente primeiro)
+    if 'DIGITACAO' in df_final.columns:
+        df_final = df_final.sort_values(by='DIGITACAO', ascending=False)
     
-    # 4. Remover duplicatas: Manter apenas a 1ª ocorrência (a mais recente) 
-    # de cada tipo (Entrada/Saída) por Produto, Filial e Empresa.
+    # Manter apenas a primeira ocorrência (a mais nova) de cada tipo por produto/filial
     df_reduzido = df_final.drop_duplicates(
-        subset=['EMPRESA_ARQUIVO', 'FILIAL', 'PRODUTO', 'TIPOMOVIMENTO'], 
+        subset=['EMPRESA_ARQUIVO', 'FILIAL', 'PRODUTO', 'TIPOMOVIMENTO'],
         keep='first'
     ).copy()
-    
-    # --- FIM DA LÓGICA DE REDUÇÃO ---
 
-    cols_m = ["EMPRESA_ARQUIVO", "FILIAL", "DOCUMENTO", "DIGITACAO", "NOTA DEVOLUCAO", "PRODUTO", 
-              "DESCRICAO", "CENTRO CUSTO", "RAZAO SOCIAL", "QUANTIDADE", "PRECO UNITARIO", "TOTAL", "TIPOMOVIMENTO"]
+    # Seleção de Colunas Finais
+    cols_desejadas = ["EMPRESA_ARQUIVO", "FILIAL", "DOCUMENTO", "DIGITACAO", "NOTA DEVOLUCAO", "PRODUTO", 
+                      "DESCRICAO", "CENTRO CUSTO", "RAZAO SOCIAL", "QUANTIDADE", "PRECO UNITARIO", "TOTAL", "TIPOMOVIMENTO"]
     
-    df_reduzido = df_reduzido[[c for c in cols_m if c in df_reduzido.columns]]
+    df_reduzido = df_reduzido[[c for c in cols_desejadas if c in df_reduzido.columns]]
 
+    # Join com a tabela de Nomes de Filiais
     df_reduzido['CHAVE_JOIN'] = df_reduzido['EMPRESA_ARQUIVO'] + " " + df_reduzido['FILIAL']
     df_reduzido = pd.merge(df_reduzido, df_emp_ref, left_on='CHAVE_JOIN', right_on='Empresa_Cod_Filial', how='left')
     
@@ -90,7 +102,8 @@ def tratar_notas_fiscais(list_files):
 
 def buscar_movimentacoes_nuvem(engine, produto_cod):
     try:
+        # Busca ordenada por data
         query = text("SELECT * FROM movimentacoes WHERE PRODUTO = :p ORDER BY DIGITACAO DESC")
         return pd.read_sql(query, engine, params={"p": produto_cod})
-    except:
+    except Exception as e:
         return pd.DataFrame()
