@@ -57,38 +57,67 @@ def get_engine():
         return None
 
 
+def _tabela_existe(engine, tabela):
+    """Verifica se a tabela já existe no banco PostgreSQL."""
+    from sqlalchemy import inspect as sa_inspect
+    try:
+        return sa_inspect(engine).has_table(tabela)
+    except Exception:
+        return False
+
+
+def _colunas_batem(engine, tabela, df):
+    """Verifica se as colunas do DataFrame batem com as da tabela no banco."""
+    from sqlalchemy import inspect as sa_inspect
+    try:
+        cols_banco = {c["name"] for c in sa_inspect(engine).get_columns(tabela)}
+        cols_df = set(df.columns.tolist())
+        return cols_df == cols_banco
+    except Exception:
+        return False
+
+
 def salvar_no_banco(df, tabela):
     """
-    CORREÇÃO #1: usa 'append' + deduplicação para preservar histórico.
-    Após o append, remove duplicatas mantendo o registro mais recente
-    (ordenado por DIGITACAO quando disponível).
+    Estratégia de escrita:
+    - Se a tabela não existe OU as colunas mudaram → replace (recria estrutura).
+    - Se a tabela existe e as colunas batem → append + dedup por chave natural.
+    Isso resolve migrações de esquema (ex: 'NOTA DEVOLUCAO' → 'NOTA_DEVOLUCAO')
+    sem exigir intervenção manual no banco.
     """
     engine = get_engine()
     if engine is None or df.empty:
         return False
 
     try:
-        # 1. Adiciona os novos registros sem apagar os existentes
-        df.to_sql(tabela, engine, if_exists="append", index=False, chunksize=5000)
+        from sqlalchemy import text as sa_text
 
-        # 2. Deduplicação no banco: mantém o registro mais recente por chave natural
-        #    A lógica varia por tabela — generalizamos pelo ctid (rowid interno do PG)
-        with engine.begin() as conn:
+        tabela_existe = _tabela_existe(engine, tabela)
+        colunas_ok    = _colunas_batem(engine, tabela, df) if tabela_existe else False
+
+        if not tabela_existe or not colunas_ok:
+            # Recria a tabela com a nova estrutura
+            df.to_sql(tabela, engine, if_exists="replace", index=False, chunksize=5000)
+            if not tabela_existe:
+                st.info(f"ℹ️ Tabela '{tabela}' criada com sucesso.")
+            else:
+                st.info(f"ℹ️ Estrutura de '{tabela}' atualizada (colunas alteradas).")
+        else:
+            # Append seguro: colunas idênticas
+            df.to_sql(tabela, engine, if_exists="append", index=False, chunksize=5000)
+
+            # Deduplicação: mantém o registro mais recente por chave natural
             if tabela == "movimentacoes":
-                dedup_sql = """
+                dedup_sql = sa_text("""
                     DELETE FROM movimentacoes a
                     USING movimentacoes b
                     WHERE a.ctid < b.ctid
-                      AND a."EMPRESA_ARQUIVO" = b."EMPRESA_ARQUIVO"
-                      AND a."FILIAL"           = b."FILIAL"
-                      AND a."PRODUTO"          = b."PRODUTO"
-                      AND a."TIPOMOVIMENTO"    = b."TIPOMOVIMENTO";
-                """
-                conn.execute(__import__("sqlalchemy").text(dedup_sql))
-            elif tabela == "auditoria":
-                # Para auditoria fazemos replace completo pois é snapshot periódico
-                # (recarregamos do zero a partir dos arquivos de entrada)
-                pass  # já inserido acima com append; snapshot anterior foi limpo antes
+                      AND a."Empresa_Filial_Nome" = b."Empresa_Filial_Nome"
+                      AND a."PRODUTO"             = b."PRODUTO"
+                      AND a."TIPOMOVIMENTO"       = b."TIPOMOVIMENTO";
+                """)
+                with engine.begin() as conn:
+                    conn.execute(dedup_sql)
 
         return True
 
