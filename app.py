@@ -489,7 +489,7 @@ if df_base is not None:
                     fmt = {
                         "Vl Unit"      : "R$ {:,.2f}",
                         "Vl Total"     : "R$ {:,.2f}",
-                        "Centro Custo" : "{:,.0f}",
+                        "Centro Custo" : "{:.0f}",
                         "Qtd"          : "{:,.2f}",
                     }
                     # Remove do fmt colunas ausentes
