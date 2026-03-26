@@ -24,17 +24,15 @@ def remover_acentos(texto):
 
 def limpar_id_produto(serie):
     """
-    Normaliza código de produto: remove '.0', espaços e aplica zero-fill.
-    CORREÇÃO #6: zfill dinâmico — respeita códigos com mais de 6 dígitos.
+    Normaliza código de produto: remove '.0', espaços e aplica zero-fill fixo de 6.
+    Padrão do ERP: códigos de produto sempre com 6 dígitos.
     """
-    serie_limpa = (
+    return (
         serie.astype(str)
         .str.replace(r"\.0$", "", regex=True)
         .str.strip()
+        .str.zfill(6)
     )
-    max_len = serie_limpa.str.len().max()
-    pad = max(6, int(max_len)) if pd.notna(max_len) else 6
-    return serie_limpa.str.zfill(pad)
 
 
 def limpar_id_geral(serie, digitos):
@@ -197,19 +195,18 @@ def tratar_notas_fiscais(list_files):
 def buscar_movimentacoes_nuvem(engine, produto_cod):
     """
     Busca movimentações pelo código do produto.
-    Usa LIKE '%<codigo>' para ser agnóstico ao zero-fill aplicado na gravação,
-    evitando divergência entre o valor digitado e o armazenado no banco.
+    Normaliza o input com zfill(6) — igual ao aplicado na gravação — e busca com = exato.
     """
     if engine is None:
         raise ConnectionError("Engine não inicializada. Verifique a conexão com o banco.")
 
-    # Remove zeros à esquerda do input para montar o sufixo de busca
-    codigo_limpo = str(produto_cod).strip().lstrip("0") or "0"
+    # Normaliza exatamente como foi gravado: remove .0, strip, zfill(6)
+    codigo_normalizado = str(produto_cod).replace(".0", "").strip().zfill(6)
 
     try:
         query = text(
-            'SELECT * FROM movimentacoes WHERE "PRODUTO" LIKE :p ORDER BY "DIGITACAO" DESC'
+            'SELECT * FROM movimentacoes WHERE "PRODUTO" = :p ORDER BY "DIGITACAO" DESC'
         )
-        return pd.read_sql(query, engine, params={"p": f"%{codigo_limpo}"})
+        return pd.read_sql(query, engine, params={"p": codigo_normalizado})
     except Exception as exc:
         raise RuntimeError(f"Erro ao consultar movimentações para '{produto_cod}': {exc}") from exc
