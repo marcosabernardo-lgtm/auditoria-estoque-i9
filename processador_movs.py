@@ -77,11 +77,11 @@ def tratar_notas_fiscais(list_files):
     df_emp_ref = get_df_empresas()
     all_movs = []
 
-    # CORREÇÃO #5: sem espaço no nome de coluna SQL
+    # EMPRESA_ARQUIVO e FILIAL usadas apenas para join — excluídas do resultado final
     cols_finais = [
-        "EMPRESA_ARQUIVO", "FILIAL", "DOCUMENTO", "DIGITACAO",
-        "NOTA_DEVOLUCAO", "PRODUTO", "DESCRICAO", "CENTRO_CUSTO",
-        "RAZAO_SOCIAL", "QUANTIDADE", "PRECO_UNITARIO", "TOTAL", "TIPOMOVIMENTO",
+        "DOCUMENTO", "DIGITACAO", "NOTA_DEVOLUCAO", "PRODUTO",
+        "DESCRICAO", "CENTRO_CUSTO", "RAZAO_SOCIAL",
+        "QUANTIDADE", "PRECO_UNITARIO", "TOTAL", "TIPOMOVIMENTO",
     ]
 
     for file in list_files:
@@ -163,8 +163,17 @@ def tratar_notas_fiscais(list_files):
 
     df_reduzido = df_reduzido[cols_presentes]
 
-    # Join com nomes de filiais
-    df_reduzido = df_reduzido.copy()
+    # Padroniza DOCUMENTO com zero-fill (9 digitos) para nao perder zeros a esquerda
+    if "DOCUMENTO" in df_reduzido.columns:
+        df_reduzido["DOCUMENTO"] = (
+            df_reduzido["DOCUMENTO"]
+            .astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.strip()
+            .str.zfill(9)
+        )
+
+    # Join com nomes de filiais (EMPRESA_ARQUIVO e FILIAL usados so para chave)
     df_reduzido["CHAVE_JOIN"] = df_reduzido["EMPRESA_ARQUIVO"] + " " + df_reduzido["FILIAL"]
     df_reduzido = pd.merge(
         df_reduzido,
@@ -173,8 +182,13 @@ def tratar_notas_fiscais(list_files):
         right_on="Empresa_Cod_Filial",
         how="left",
     )
+    df_reduzido = df_reduzido.drop(columns=["CHAVE_JOIN", "Empresa_Cod_Filial", "EMPRESA_ARQUIVO", "FILIAL"])
 
-    return df_reduzido.drop(columns=["CHAVE_JOIN", "Empresa_Cod_Filial"])
+    # Empresa_Filial_Nome como primeira coluna, TIPOMOVIMENTO como segunda
+    col_order = ["Empresa_Filial_Nome", "TIPOMOVIMENTO"] + [
+        c for c in df_reduzido.columns if c not in ("Empresa_Filial_Nome", "TIPOMOVIMENTO")
+    ]
+    return df_reduzido[[c for c in col_order if c in df_reduzido.columns]]
 
 
 # ---------------------------------------------------------------------------
