@@ -466,19 +466,35 @@ if df_base is not None:
                         "PRECO_UNITARIO" : "Vl Unit",
                         "TOTAL"          : "Vl Total",
                     })
-                    # Formata valores monetários
-                    fmt = {}
-                    if "Vl Unit" in df_nf_res.columns:
-                        # Converte string BR para float antes de formatar
-                        for col in ["Vl Unit", "Vl Total"]:
-                            if col in df_nf_res.columns:
-                                df_nf_res[col] = (
-                                    df_nf_res[col].astype(str)
-                                    .str.replace(".", "", regex=False)
-                                    .str.replace(",", ".", regex=False)
-                                )
-                                df_nf_res[col] = pd.to_numeric(df_nf_res[col], errors="coerce")
-                                fmt[col] = "R$ {:,.2f}"
+                    # Converte colunas numéricas que podem vir como string no formato BR
+                    def to_float_br(serie):
+                        return pd.to_numeric(
+                            serie.astype(str)
+                                 .str.replace(r"[^\d,.-]", "", regex=True)
+                                 .str.replace(".", "", regex=False)
+                                 .str.replace(",", ".", regex=False),
+                            errors="coerce"
+                        )
+
+                    for col in ["Vl Unit", "Vl Total"]:
+                        if col in df_nf_res.columns:
+                            df_nf_res[col] = to_float_br(df_nf_res[col])
+
+                    # Garante tipos corretos para Centro Custo e Qtd
+                    if "Centro Custo" in df_nf_res.columns:
+                        df_nf_res["Centro Custo"] = pd.to_numeric(df_nf_res["Centro Custo"], errors="coerce")
+                    if "Qtd" in df_nf_res.columns:
+                        df_nf_res["Qtd"] = pd.to_numeric(df_nf_res["Qtd"], errors="coerce")
+
+                    fmt = {
+                        "Vl Unit"      : "R$ {:,.2f}",
+                        "Vl Total"     : "R$ {:,.2f}",
+                        "Centro Custo" : "{:,.0f}",
+                        "Qtd"          : "{:,.2f}",
+                    }
+                    # Remove do fmt colunas ausentes
+                    fmt = {k: v for k, v in fmt.items() if k in df_nf_res.columns}
+
                     st.dataframe(
                         df_nf_res.style.format(fmt, decimal=",", thousands="."),
                         use_container_width=True,
