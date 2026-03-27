@@ -82,67 +82,6 @@ st.markdown(
         background-color: #EC6E21 !important;
     }
 
-    /* ========================================================
-       TABELAS - FUNDO CLARO (CORRIGIDO)
-       ======================================================== */
-
-    /* Container externo do dataframe */
-    div[data-testid="stDataFrame"] {
-        background-color: transparent !important;
-        border-radius: 10px;
-        overflow: hidden;
-        border: 1px solid rgba(236, 110, 33, 0.3);
-    }
-
-    /* Iframe interno que renderiza a tabela Streamlit */
-    div[data-testid="stDataFrame"] iframe {
-        background-color: #ffffff !important;
-    }
-
-    /* Cabeçalho das colunas */
-    div[data-testid="stDataFrame"] [role="columnheader"],
-    div[data-testid="stDataFrame"] th {
-        background-color: #005562 !important;
-        color: #ffffff !important;
-        font-weight: 700 !important;
-        border-bottom: 2px solid #EC6E21 !important;
-        font-size: 0.82rem !important;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-    }
-
-    /* Células de dados - fundo branco/claro */
-    div[data-testid="stDataFrame"] [role="gridcell"],
-    div[data-testid="stDataFrame"] td {
-        background-color: #f8fafb !important;
-        color: #1a2b35 !important;
-        border-bottom: 1px solid #e0eaed !important;
-        font-size: 0.85rem !important;
-    }
-
-    /* Linhas alternadas (zebra) */
-    div[data-testid="stDataFrame"] [role="row"]:nth-child(even) [role="gridcell"] {
-        background-color: #edf4f6 !important;
-    }
-
-    /* Hover na linha */
-    div[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {
-        background-color: #d6edf2 !important;
-    }
-
-    /* Scrollbar da tabela */
-    div[data-testid="stDataFrame"] ::-webkit-scrollbar {
-        height: 6px;
-        width: 6px;
-    }
-    div[data-testid="stDataFrame"] ::-webkit-scrollbar-track {
-        background: #e0eaed;
-    }
-    div[data-testid="stDataFrame"] ::-webkit-scrollbar-thumb {
-        background: #EC6E21;
-        border-radius: 3px;
-    }
-
     /* FILTROS E INPUTS */
     div[data-testid="stRadio"] > div {
         background-color: #004550 !important;
@@ -179,6 +118,72 @@ def para_excel(df):
         df.to_excel(writer, index=False, sheet_name='Auditoria')
     processed_data = output.getvalue()
     return processed_data
+
+# --- ESTILO DA TABELA VIA PANDAS STYLER ---
+# CSS externo não penetra o iframe do st.dataframe.
+# A única forma de mudar cores dentro da tabela é via Pandas Styler.
+def estilizar_tabela(df):
+    fmt_num = {}
+    for col in df.columns:
+        if col in ["Saldo ERP (Total)", "Saldo ERP (Rateado)", "Saldo WMS", "Divergência"]:
+            fmt_num[col] = "{:,.2f}"
+        elif col in ["Vl Unit", "Vl Divergência", "Vl Total ERP"]:
+            fmt_num[col] = "R$ {:,.2f}"
+
+    def colorir_linha(row):
+        return ['background-color: #ffffff; color: #1a2b35; font-size: 0.84rem;'] * len(row)
+
+    def colorir_status(val):
+        if val == "Divergente":
+            return 'background-color: #fff0eb; color: #c0392b; font-weight: bold;'
+        elif val == "OK":
+            return 'background-color: #eafaf1; color: #1e8449; font-weight: bold;'
+        return 'background-color: #ffffff; color: #1a2b35;'
+
+    styled = df.style.apply(colorir_linha, axis=1)
+
+    if "Status" in df.columns:
+        styled = styled.applymap(colorir_status, subset=["Status"])
+
+    styled = styled.set_table_styles([
+        {
+            'selector': 'thead th',
+            'props': [
+                ('background-color', '#005562'),
+                ('color', 'white'),
+                ('font-weight', '700'),
+                ('font-size', '0.80rem'),
+                ('text-transform', 'uppercase'),
+                ('letter-spacing', '0.04em'),
+                ('border-bottom', '2px solid #EC6E21'),
+                ('padding', '10px 8px'),
+            ]
+        },
+        {
+            'selector': 'tbody tr:nth-child(even) td',
+            'props': [
+                ('background-color', '#f0f6f8'),
+                ('color', '#1a2b35'),
+            ]
+        },
+        {
+            'selector': 'td',
+            'props': [
+                ('padding', '8px 10px'),
+                ('border-bottom', '1px solid #dde8ec'),
+                ('white-space', 'nowrap'),
+            ]
+        },
+        {
+            'selector': 'table',
+            'props': [('border-collapse', 'collapse'), ('width', '100%')]
+        },
+    ])
+
+    if fmt_num:
+        styled = styled.format(fmt_num, na_rep="-")
+
+    return styled
 
 # --- FUNÇÕES DE BANCO ---
 def get_engine():
@@ -252,8 +257,6 @@ if df_base is not None:
     # ABAS
     tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações"])
 
-    fmt_num = {"Saldo ERP (Total)": "{:,.2f}", "Saldo ERP (Rateado)": "{:,.2f}", "Vl Unit": "R$ {:,.2f}", "Saldo WMS": "{:,.2f}", "Divergência": "{:,.2f}", "Vl Divergência": "R$ {:,.2f}", "Vl Total ERP": "R$ {:,.2f}"}
-
     def preparar_view(df):
         if df.empty: return df
         df_v = df.rename(columns={"C Unitario": "Vl Unit"})
@@ -264,7 +267,8 @@ if df_base is not None:
     with tab1:
         st.subheader("Auditoria - Unidades Joinville")
         v_jlle = preparar_view(dff_jlle)
-        st.dataframe(v_jlle.style.format(fmt_num, decimal=",", thousands="."), use_container_width=True, hide_index=True)
+        if not v_jlle.empty:
+            st.dataframe(estilizar_tabela(v_jlle), use_container_width=True, hide_index=True)
         
         st.download_button(
             label="📥 Exportar Joinville para Excel",
@@ -276,7 +280,8 @@ if df_base is not None:
     with tab2:
         st.subheader("Auditoria - Outras Filiais")
         v_outras = preparar_view(dff_outras)
-        st.dataframe(v_outras.style.format(fmt_num, decimal=",", thousands="."), use_container_width=True, hide_index=True)
+        if not v_outras.empty:
+            st.dataframe(estilizar_tabela(v_outras), use_container_width=True, hide_index=True)
         
         st.download_button(
             label="📥 Exportar Filiais para Excel",
@@ -314,7 +319,7 @@ if df_base is not None:
                 engine = get_engine()
                 df_nf = buscar_movimentacoes_nuvem(engine, f_code)
                 if not df_nf.empty:
-                    st.dataframe(df_nf, use_container_width=True, hide_index=True)
+                    st.dataframe(estilizar_tabela(df_nf), use_container_width=True, hide_index=True)
             except: pass
 
 else:
