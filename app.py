@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
 
 # IMPORTANDO AS NOVAS ABAS
-from tabs import joinville, filiais, indicadores, movimentacoes
+from tabs import joinville, filiais, indicadores, movimentacoes, inventario_ciclico
 
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
@@ -125,8 +125,8 @@ if df_base is not None:
     v_jlle_view = preparar_view(dff_jlle)
     v_outras_view = preparar_view(dff_outras)
 
-    # CHAMADA DAS ABAS USANDO OS ARQUIVOS DA PASTA TABS
-    tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações"])
+    # CHAMADA DAS ABAS
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações", "🔄 Inv. Cíclico"])
 
     with tab1:
         joinville.render(v_jlle_view, estilizar_tabela, para_excel)
@@ -136,5 +136,7 @@ if df_base is not None:
         indicadores.render(dff_jlle, formatar_br)
     with tab4:
         movimentacoes.render(f_code.zfill(6) if f_code else "", get_engine(), buscar_movimentacoes_nuvem, estilizar_tabela, to_float_br)
+    with tab5:
+        inventario_ciclico.render()
 else:
     st.info("💡 Carregue os dados para começar.")
