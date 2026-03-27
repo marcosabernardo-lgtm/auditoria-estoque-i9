@@ -235,7 +235,7 @@ if df_base is not None:
 
             k4, k5, k6 = st.columns(3)
             k4.metric("TOTAL DE ITENS", f"{total_it:,}".replace(",", "."))
-            k5.metric("ITENS COM ERRO", f"{it_div:,}".replace(",", "."))
+            k5.metric("ITENS DIVERGENTE", f"{it_div:,}".replace(",", "."))
             k6.metric("ACURACIDADE ITENS", f"{ac_it:.2f}%")
 
     with tab4:
