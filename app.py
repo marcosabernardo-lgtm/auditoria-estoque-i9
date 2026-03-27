@@ -126,6 +126,7 @@ st.markdown(
 # --- FUNÇÃO PARA GERAR EXCEL (.XLSX) ---
 def para_excel(df):
     output = io.BytesIO()
+    # Usando o engine 'xlsxwriter' que precisa estar no requirements.txt
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Auditoria')
     processed_data = output.getvalue()
@@ -186,7 +187,7 @@ if df_base is not None:
 
     f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o produto...")
 
-    # Filtros
+    # Filtros finais
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code:
         dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
@@ -258,14 +259,18 @@ if df_base is not None:
 
             k4, k5, k6 = st.columns(3)
             k4.metric("TOTAL DE ITENS", f"{total_it:,}".replace(",", "."))
-            k5.metric("ITENS COM DIVERGENTES", f"{it_div:,}".replace(",", "."))
+            # NOME DO CARD ALTERADO CONFORME SOLICITADO
+            k5.metric("ITENS DIVERGENTES", f"{it_div:,}".replace(",", "."))
             k6.metric("ACURACIDADE ITENS", f"{ac_it:.2f}%")
 
     with tab4:
         if f_code and len(f_code) >= 3:
-            df_nf = buscar_movimentacoes_nuvem(get_engine(), f_code)
-            if not df_nf.empty:
-                st.dataframe(df_nf, use_container_width=True, hide_index=True)
+            try:
+                engine = get_engine()
+                df_nf = buscar_movimentacoes_nuvem(engine, f_code)
+                if not df_nf.empty:
+                    st.dataframe(df_nf, use_container_width=True, hide_index=True)
+            except: pass
 
 else:
     st.info("💡 Carregue os arquivos na barra lateral para iniciar.")
