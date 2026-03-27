@@ -82,16 +82,65 @@ st.markdown(
         background-color: #EC6E21 !important;
     }
 
-    /* TABELAS (FORÇAR AZUL PETRÓLEO) */
-    div[data-testid="stDataFrame"], 
-    div[data-testid="stDataFrame"] > div {
-        background-color: #004550 !important;
+    /* ========================================================
+       TABELAS - FUNDO CLARO (CORRIGIDO)
+       ======================================================== */
+
+    /* Container externo do dataframe */
+    div[data-testid="stDataFrame"] {
+        background-color: transparent !important;
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid rgba(236, 110, 33, 0.3);
     }
-    
-    div[data-testid="stDataFrame"] [role="columnheader"] {
+
+    /* Iframe interno que renderiza a tabela Streamlit */
+    div[data-testid="stDataFrame"] iframe {
+        background-color: #ffffff !important;
+    }
+
+    /* Cabeçalho das colunas */
+    div[data-testid="stDataFrame"] [role="columnheader"],
+    div[data-testid="stDataFrame"] th {
         background-color: #005562 !important;
-        color: white !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
         border-bottom: 2px solid #EC6E21 !important;
+        font-size: 0.82rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    /* Células de dados - fundo branco/claro */
+    div[data-testid="stDataFrame"] [role="gridcell"],
+    div[data-testid="stDataFrame"] td {
+        background-color: #f8fafb !important;
+        color: #1a2b35 !important;
+        border-bottom: 1px solid #e0eaed !important;
+        font-size: 0.85rem !important;
+    }
+
+    /* Linhas alternadas (zebra) */
+    div[data-testid="stDataFrame"] [role="row"]:nth-child(even) [role="gridcell"] {
+        background-color: #edf4f6 !important;
+    }
+
+    /* Hover na linha */
+    div[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {
+        background-color: #d6edf2 !important;
+    }
+
+    /* Scrollbar da tabela */
+    div[data-testid="stDataFrame"] ::-webkit-scrollbar {
+        height: 6px;
+        width: 6px;
+    }
+    div[data-testid="stDataFrame"] ::-webkit-scrollbar-track {
+        background: #e0eaed;
+    }
+    div[data-testid="stDataFrame"] ::-webkit-scrollbar-thumb {
+        background: #EC6E21;
+        border-radius: 3px;
     }
 
     /* FILTROS E INPUTS */
@@ -126,7 +175,6 @@ st.markdown(
 # --- FUNÇÃO PARA GERAR EXCEL (.XLSX) ---
 def para_excel(df):
     output = io.BytesIO()
-    # Usando o engine 'xlsxwriter' que precisa estar no requirements.txt
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Auditoria')
     processed_data = output.getvalue()
@@ -218,7 +266,6 @@ if df_base is not None:
         v_jlle = preparar_view(dff_jlle)
         st.dataframe(v_jlle.style.format(fmt_num, decimal=",", thousands="."), use_container_width=True, hide_index=True)
         
-        # BOTAO EXPORTAR EXCEL JOINVILLE
         st.download_button(
             label="📥 Exportar Joinville para Excel",
             data=para_excel(v_jlle),
@@ -231,7 +278,6 @@ if df_base is not None:
         v_outras = preparar_view(dff_outras)
         st.dataframe(v_outras.style.format(fmt_num, decimal=",", thousands="."), use_container_width=True, hide_index=True)
         
-        # BOTAO EXPORTAR EXCEL FILIAIS
         st.download_button(
             label="📥 Exportar Filiais para Excel",
             data=para_excel(v_outras),
@@ -259,7 +305,6 @@ if df_base is not None:
 
             k4, k5, k6 = st.columns(3)
             k4.metric("TOTAL DE ITENS", f"{total_it:,}".replace(",", "."))
-            # NOME DO CARD ALTERADO CONFORME SOLICITADO
             k5.metric("ITENS DIVERGENTES", f"{it_div:,}".replace(",", "."))
             k6.metric("ACURACIDADE ITENS", f"{ac_it:.2f}%")
 
