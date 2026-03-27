@@ -15,7 +15,7 @@ from processador_movs import (
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 
-# 2. CSS CUSTOMIZADO (TOTALMENTE INTEGRADO AO TEMA #005562)
+# 2. CSS CUSTOMIZADO (TOTALMENTE INTEGRADO AO TEMA #005562 e #EC6E21)
 st.markdown(
     """
     <style>
@@ -66,11 +66,24 @@ st.markdown(
         background-color: #EC6E21 !important;
     }
 
+    /* VOLTANDO AS BORDAS DOS FILTROS (RADIOS) */
+    div[data-testid="stRadio"] > div {
+        background-color: #004550 !important;
+        border: 1px solid #007687 !important; /* Borda do filtro */
+        border-radius: 12px;
+        padding: 8px 15px;
+        gap: 15px;
+    }
+    div[data-testid="stRadio"] label {
+        color: white !important;
+    }
+
     /* INPUT DE BUSCA */
     .stTextInput input {
         background-color: #004550 !important;
         color: white !important;
         border: 1px solid #007687 !important;
+        border-radius: 10px;
     }
 
     /* BOTÃO DE DOWNLOAD (LARANJA) */
@@ -95,7 +108,7 @@ def para_excel(df):
     processed_data = output.getvalue()
     return processed_data
 
-# --- FUNÇÃO DE ESTILIZAÇÃO DA TABELA (FUNDO = MESMA COR DA PÁGINA) ---
+# --- FUNÇÃO DE ESTILIZAÇÃO DA TABELA (FUNDO = PÁGINA) ---
 def estilizar_tabela(df):
     fmt_num = {}
     for col in df.columns:
@@ -105,7 +118,6 @@ def estilizar_tabela(df):
             fmt_num[col] = "R$ {:,.2f}"
 
     def colorir_linha(row):
-        # FUNDO EXATAMENTE IGUAL AO DA PÁGINA (#005562)
         return ['background-color: #005562; color: #ffffff; font-size: 0.84rem;'] * len(row)
 
     def colorir_status(val):
@@ -116,7 +128,6 @@ def estilizar_tabela(df):
         return ''
 
     styled = df.style.apply(colorir_linha, axis=1)
-
     if "Status" in df.columns:
         styled = styled.applymap(colorir_status, subset=["Status"])
 
@@ -124,31 +135,23 @@ def estilizar_tabela(df):
         {
             'selector': 'thead th',
             'props': [
-                ('background-color', '#004550'), # Cabeçalho levemente mais escuro que a página
+                ('background-color', '#004550'),
                 ('color', '#ffffff'),
                 ('font-weight', '700'),
-                ('border-bottom', '2px solid #EC6E21'), # Linha laranja clássica
+                ('border-bottom', '2px solid #EC6E21'),
                 ('text-transform', 'uppercase'),
-            ]
-        },
-        {
-            'selector': 'tbody tr:nth-child(even) td',
-            'props': [
-                ('background-color', '#005562'), # Sem Zebra (mesma cor da página)
             ]
         },
         {
             'selector': 'td',
             'props': [
                 ('padding', '8px 12px'),
-                ('border-bottom', '1px solid rgba(255,255,255,0.05)'), # Linha quase invisível
+                ('border-bottom', '1px solid rgba(255,255,255,0.05)'),
             ]
         }
     ])
-
     if fmt_num:
         styled = styled.format(fmt_num, na_rep="-")
-
     return styled
 
 # --- FUNÇÕES DE BANCO ---
@@ -167,21 +170,32 @@ def carregar_do_banco(tabela):
 def formatar_br(valor):
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- CORPO PRINCIPAL ---
-st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
-
+# --- INTERFACE SIDEBAR (NAVBAR RESTAURADO) ---
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
-    with st.expander("Subir Planilhas"):
-        u_wms = st.file_uploader("WMS", type=["xlsx"])
-        u_erp = st.file_uploader("ERP", type=["xlsx"])
-        if u_wms and u_erp and st.button("🚀 Processar"):
-            st.success("Recebido!")
+    
+    # 1. EXPANDER AUDITORIA
+    with st.expander("1. Subir Auditoria (WMS/ERP)"):
+        u_wms = st.file_uploader("Arquivo WMS", type=["xlsx"])
+        u_erp = st.file_uploader("Arquivo ERP", type=["xlsx"])
+        if u_wms and u_erp and st.button("🚀 Processar Auditoria"):
+            # Aqui entraria sua lógica de processamento
+            st.success("Arquivos recebidos!")
+
+    # 2. EXPANDER NOTAS (RESTALRADO)
+    with st.expander("2. Subir Movimentações (Notas)"):
+        u_movs = st.file_uploader("Arquivos de Notas", type=["xlsx"], accept_multiple_files=True)
+        if u_movs and st.button("📦 Processar Notas"):
+            # Aqui entraria sua lógica de processamento das notas
+            st.success("Notas recebidas!")
+
+# --- CORPO PRINCIPAL ---
+st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
 
 df_base = carregar_do_banco("auditoria")
 
 if df_base is not None:
-    st.write("### 🛠️ Filtros")
+    st.write("### 🛠️ Filtros de Seleção")
     c1, c2, c3 = st.columns(3)
     with c1:
         f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
@@ -198,7 +212,7 @@ if df_base is not None:
     with c3:
         f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
 
-    f_code = st.text_input("🔍 Buscar Produto", placeholder="Código...")
+    f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o código do produto...")
 
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code:
@@ -221,12 +235,14 @@ if df_base is not None:
         return df_v[cols]
 
     with tab1:
+        st.subheader("Auditoria - Unidades Joinville")
         v_jlle = preparar_view(dff_jlle)
         if not v_jlle.empty:
             st.dataframe(estilizar_tabela(v_jlle), use_container_width=True, hide_index=True)
         st.download_button("📥 Baixar Excel", para_excel(v_jlle), "auditoria_joinville.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     with tab2:
+        st.subheader("Auditoria - Outras Filiais")
         v_out = preparar_view(dff_outras)
         if not v_out.empty:
             st.dataframe(estilizar_tabela(v_out), use_container_width=True, hide_index=True)
@@ -239,9 +255,9 @@ if df_base is not None:
             ac_v = (1 - (v_err/v_total))*100 if v_total > 0 else 0
             
             k1, k2, k3 = st.columns(3)
-            k1.metric("ESTOQUE TOTAL", f"R$ {formatar_br(v_total)}")
-            k2.metric("VALOR DIVERGENTE", f"R$ {formatar_br(v_err)}")
-            k3.metric("ACURACIDADE", f"{ac_v:.2f}%")
+            k1.metric("VALOR EM ESTOQUE", f"R$ {formatar_br(v_total)}")
+            k2.metric("IMPACTO DIVERGENTE", f"R$ {formatar_br(v_err)}")
+            k3.metric("ACURACIDADE VALOR", f"{ac_v:.2f}%")
 
             df_unq = dff_jlle.drop_duplicates(subset=["Empresa", "Filial", "Armazem", "Produto"])
             total_it = len(df_unq)
