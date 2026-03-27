@@ -137,6 +137,6 @@ if df_base is not None:
     with tab4:
         movimentacoes.render(f_code.zfill(6) if f_code else "", get_engine(), buscar_movimentacoes_nuvem, estilizar_tabela, to_float_br)
     with tab5:
-        inventario_ciclico.render()
+        inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)
 else:
     st.info("💡 Carregue os dados para começar.")
