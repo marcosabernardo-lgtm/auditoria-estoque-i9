@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from processador_movs import (
     tratar_notas_fiscais,
     buscar_movimentacoes_nuvem,
@@ -32,6 +32,7 @@ st.markdown(
     .stTabs [data-baseweb="tab"] { background-color: #004550 !important; color: white !important; border-radius: 5px 5px 0px 0px; padding: 10px 20px; }
     .stTabs [aria-selected="true"] { background-color: #EC6E21 !important; }
 
+    /* BORDAS DOS FILTROS (RADIOS) */
     div[data-testid="stRadio"] > div { background-color: #004550 !important; border: 1px solid #007687 !important; border-radius: 12px; padding: 8px 15px; gap: 15px; }
     div[data-testid="stRadio"] label, .stTextInput label { color: white !important; }
     .stTextInput input { background-color: #004550 !important; color: white !important; border: 1px solid #007687 !important; border-radius: 10px; }
@@ -61,6 +62,7 @@ def estilizar_tabela(df):
             fmt_cols[col] = "R$ {:,.2f}"
 
     def colorir_linha(row):
+        # FUNDO EXATAMENTE IGUAL AO DA PÁGINA
         return ['background-color: #005562; color: #ffffff; font-size: 0.84rem;'] * len(row)
 
     def colorir_status(val):
@@ -78,22 +80,10 @@ def estilizar_tabela(df):
     if fmt_cols: styled = styled.format(fmt_cols, na_rep="-")
     return styled
 
-# --- CONEXÃO E BANCO ---
+# --- BANCO ---
 def get_engine():
     try: return create_engine(st.secrets["connections"]["postgresql"]["url"])
     except: return None
-
-def salvar_no_banco(df, tabela):
-    engine = get_engine()
-    if engine is None or df.empty: 
-        return False
-    try:
-        # Modo append para não apagar o que já existe, mas adicionando o novo
-        df.to_sql(tabela, engine, if_exists="append", index=False, chunksize=5000)
-        return True
-    except Exception as e:
-        st.error(f"Erro no Banco: {e}")
-        return False
 
 def carregar_do_banco(tabela):
     engine = get_engine()
@@ -101,47 +91,31 @@ def carregar_do_banco(tabela):
     try: return pd.read_sql(f"SELECT * FROM {tabela}", engine)
     except: return None
 
-def formatar_br(valor):
-    return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-# --- INTERFACE SIDEBAR ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
-    
     with st.expander("1. Auditoria (WMS/ERP)"):
-        u_wms = st.file_uploader("WMS", type=["xlsx"])
-        u_erp = st.file_uploader("ERP", type=["xlsx"])
+        u_wms = st.file_uploader("Upload WMS", type=["xlsx"])
+        u_erp = st.file_uploader("Upload ERP", type=["xlsx"])
         if u_wms and u_erp and st.button("🚀 Enviar Auditoria"):
-            st.info("Processando auditoria...")
-            # Aqui você chamaria a função processar_auditoria e salvar_auditoria_no_banco
-            st.success("Auditoria atualizada!")
+            st.success("Recebido!")
 
     with st.expander("2. Notas Fiscais (Histórico)"):
         u_movs = st.file_uploader("Arquivos Protheus", type=["xlsx"], accept_multiple_files=True)
         if u_movs and st.button("📦 Processar Movimentações"):
-            # LIMPANDO CACHE PARA GARANTIR QUE ELE LEIA O NOVO ARQUIVO
             st.cache_data.clear()
-            
-            with st.spinner("Lendo e filtrando arquivos..."):
-                try:
-                    df_nf_novo = tratar_notas_fiscais(u_movs)
-                    
-                    if not df_nf_novo.empty:
-                        qtd_linhas = len(df_nf_novo)
-                        if salvar_no_banco(df_nf_novo, "movimentacoes"):
-                            st.success(f"✅ Sucesso! {qtd_linhas} novas linhas enviadas.")
-                            st.rerun()
-                    else:
-                        st.warning("⚠️ O arquivo foi lido, mas não foram encontrados dados válidos (Verifique se há 'S' na coluna ESTOQUE).")
-                except Exception as e:
-                    st.error(f"❌ Erro ao processar: {e}")
+            df_nf_novo = tratar_notas_fiscais(u_movs)
+            if not df_nf_novo.empty:
+                engine = get_engine()
+                df_nf_novo.to_sql("movimentacoes", engine, if_exists="append", index=False)
+                st.success(f"✅ {len(df_nf_novo)} linhas enviadas!")
+                st.rerun()
 
 # --- CORPO PRINCIPAL ---
 st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
 df_base = carregar_do_banco("auditoria")
 
 if df_base is not None:
-    # FILTROS
     c1, c2, c3 = st.columns(3)
     with c1: f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
     df_t1 = df_base if f_emp == "Todas" else df_base[df_base["Empresa"] == f_emp]
@@ -153,13 +127,18 @@ if df_base is not None:
     df_t2 = df_t1 if f_fil_longa == "Todas" else df_t1[df_t1["Filial"] == f_fil_longa]
     with c3: f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
 
-    f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o código...")
+    f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o produto...")
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
+    
+    # Padroniza código de busca para 6 dígitos
+    f_code_padded = f_code.zfill(6) if f_code else ""
     if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
     lista_joinville = ["Maquinas - Filial", "Service - Matriz", "Service - Filial", "Tools - Filial"]
     dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
+    
+    # Limpeza visual das filiais
     dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
     dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
@@ -175,7 +154,12 @@ if df_base is not None:
     with tab1:
         v_jlle = preparar_view(dff_jlle)
         if not v_jlle.empty: st.dataframe(estilizar_tabela(v_jlle), use_container_width=True, hide_index=True)
-        st.download_button("📥 Excel Joinville", para_excel(v_jlle), "joinville.xlsx")
+        else: st.info("Produto não encontrado em Joinville.")
+
+    with tab2:
+        v_out = preparar_view(dff_outras)
+        if not v_out.empty: st.dataframe(estilizar_tabela(v_out), use_container_width=True, hide_index=True)
+        else: st.info("Produto não encontrado em Outras Filiais.")
 
     with tab3:
         if not dff_jlle.empty:
@@ -184,29 +168,23 @@ if df_base is not None:
             ac_v = (1 - (v_err/v_total))*100 if v_total > 0 else 0
             df_unq = dff_jlle.drop_duplicates(subset=["Empresa", "Filial", "Armazem", "Produto"])
             k1, k2, k3 = st.columns(3)
-            k1.metric("ESTOQUE TOTAL", f"R$ {formatar_br(v_total)}")
-            k2.metric("VALOR DIVERGENTE", f"R$ {formatar_br(v_err)}")
+            k1.metric("ESTOQUE TOTAL", f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            k2.metric("VALOR DIVERGENTE", f"R$ {v_err:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
             k3.metric("ACURACIDADE VALOR", f"{ac_v:.2f}%")
             k4, k5, k6 = st.columns(3)
             k4.metric("TOTAL ITENS", f"{len(df_unq):,}".replace(",", "."))
             k5.metric("ITENS DIVERGENTES", f"{len(df_unq[df_unq['Status'] == 'Divergente']):,}".replace(",", "."))
-            total_it = len(df_unq)
             div_it = len(df_unq[df_unq['Status'] == 'Divergente'])
-            ac_it_val = (1 - (div_it/total_it)) * 100 if total_it > 0 else 100
-            k6.metric("ACURACIDADE ITENS", f"{ac_it_val:.2f}%")
+            ac_it = (1 - (div_it/len(df_unq)))*100 if len(df_unq) > 0 else 100
+            k6.metric("ACURACIDADE ITENS", f"{ac_it:.2f}%")
 
     with tab4:
-        if f_code and len(f_code) >= 3:
+        if f_code_padded:
             engine = get_engine()
-            df_nf = buscar_movimentacoes_nuvem(engine, f_code)
+            df_nf = buscar_movimentacoes_nuvem(engine, f_code_padded)
             if not df_nf.empty:
-                # LÓGICA DE ÚLTIMA MOVIMENTAÇÃO
-                df_nf["DIGITACAO"] = pd.to_datetime(df_nf["DIGITACAO"])
-                df_nf = df_nf.sort_values(by="DIGITACAO", ascending=False)
-                df_nf = df_nf.drop_duplicates(subset=["Empresa_Filial_Nome", "TIPOMOVIMENTO"], keep="first")
-
-                # FORMATAÇÃO
-                df_nf["DIGITACAO"] = df_nf["DIGITACAO"].dt.strftime("%d/%m/%Y")
+                df_nf = df_nf.drop_duplicates()
+                df_nf["DIGITACAO"] = pd.to_datetime(df_nf["DIGITACAO"]).dt.strftime("%d/%m/%Y")
                 if "Empresa_Filial_Nome" in df_nf.columns:
                     split = df_nf["Empresa_Filial_Nome"].str.split(" - ", n=1, expand=True)
                     df_nf.insert(0, "Filial", split[1].fillna(""))
@@ -221,7 +199,7 @@ if df_base is not None:
                 })
 
                 if "Nota Devolução" in df_nf.columns:
-                    df_nf["Nota Devolução"] = df_nf["Nota Devolução"].astype(str).str.replace(".0", "", regex=False).replace(["None", "nan"], "")
+                    df_nf["Nota Devolução"] = df_nf["Nota Devolução"].astype(str).str.replace(".0", "", regex=False).replace(["None", "nan", "nan.0"], "")
                     df_nf["Nota Devolução"] = df_nf["Nota Devolução"].apply(lambda x: x.zfill(9) if x != "" else "")
                 
                 if "Centro Custo" in df_nf.columns:
@@ -230,9 +208,7 @@ if df_base is not None:
                 for col in ["Vl Unit", "Vl Total"]:
                     if col in df_nf.columns: df_nf[col] = to_float_br(df_nf[col])
 
-                st.write(f"### 🕒 Últimas Movimentações (Entrada/Saída) por Filial: {f_code}")
                 st.dataframe(estilizar_tabela(df_nf), use_container_width=True, hide_index=True)
-            else:
-                st.warning("Nenhuma movimentação encontrada.")
+            else: st.warning("Nenhuma movimentação para o código informado.")
 else:
-    st.info("💡 Aguardando dados...")
+    st.info("💡 Carregue os dados para começar.")
