@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 from sqlalchemy import create_engine
 from processador_movs import (
     tratar_notas_fiscais,
@@ -18,7 +19,7 @@ st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 st.markdown(
     """
     <style>
-    /* 1. FUNDO GERAL */
+    /* FUNDO GERAL */
     .stApp {
         background-color: #005562 !important;
     }
@@ -26,13 +27,13 @@ st.markdown(
         background-color: #005562 !important;
     }
     
-    /* GARANTIR QUE A SIDEBAR APAREÇA */
+    /* SIDEBAR */
     section[data-testid="stSidebar"] {
         display: block !important;
         background-color: #004550 !important;
     }
 
-    /* 2. TÍTULOS */
+    /* TÍTULOS */
     .main-title {
         border-left: 6px solid #EC6E21;
         padding-left: 15px;
@@ -49,7 +50,7 @@ st.markdown(
         margin-bottom: 10px;
     }
 
-    /* 3. CARDS DE MÉTRICAS */
+    /* CARDS DE MÉTRICAS */
     div[data-testid="stMetric"] {
         border: 2px solid #EC6E21 !important;
         background-color: #004550 !important;
@@ -67,7 +68,7 @@ st.markdown(
         opacity: 0.8;
     }
 
-    /* 4. ABAS (NAVBAR) */
+    /* ABAS (NAVBAR) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
     }
@@ -81,21 +82,19 @@ st.markdown(
         background-color: #EC6E21 !important;
     }
 
-    /* 5. TABELAS (FORÇAR AZUL PETRÓLEO EM TODAS AS CÉLULAS) */
-    /* Isso remove o fundo preto que o Streamlit coloca por padrão */
+    /* TABELAS (FORÇAR AZUL PETRÓLEO) */
     div[data-testid="stDataFrame"], 
     div[data-testid="stDataFrame"] > div {
         background-color: #004550 !important;
     }
     
-    /* Cabeçalhos da tabela */
     div[data-testid="stDataFrame"] [role="columnheader"] {
         background-color: #005562 !important;
         color: white !important;
         border-bottom: 2px solid #EC6E21 !important;
     }
 
-    /* 6. FILTROS E INPUTS */
+    /* FILTROS E INPUTS */
     div[data-testid="stRadio"] > div {
         background-color: #004550 !important;
         border: 1px solid #007687 !important;
@@ -109,12 +108,30 @@ st.markdown(
         color: white !important;
         border: 1px solid #007687 !important;
     }
+
+    /* BOTÃO DE DOWNLOAD (LARANJA) */
+    .stDownloadButton button {
+        background-color: #EC6E21 !important;
+        color: white !important;
+        border: none !important;
+        padding: 10px 20px !important;
+        border-radius: 8px !important;
+        font-weight: bold !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# --- FUNÇÕES DE BANCO E LÓGICA ---
+# --- FUNÇÃO PARA GERAR EXCEL (.XLSX) ---
+def para_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Auditoria')
+    processed_data = output.getvalue()
+    return processed_data
+
+# --- FUNÇÕES DE BANCO ---
 def get_engine():
     try:
         conn_url = st.secrets["connections"]["postgresql"]["url"]
@@ -130,26 +147,18 @@ def carregar_do_banco(tabela):
 def formatar_br(valor):
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-@st.cache_data
-def processar_auditoria(file_wms, file_estoque):
-    # Lógica de processamento (WMS/ERP) conforme o resumo original
-    # (Omitido aqui por brevidade, mas deve ser a sua função completa)
-    pass
-
-# --- INTERFACE SIDEBAR (NAVBAR DE INPUT) ---
+# --- INTERFACE SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
     with st.expander("1. Auditoria (WMS/ERP)"):
         u_wms = st.file_uploader("Upload WMS", type=["xlsx"])
         u_erp = st.file_uploader("Upload ERP", type=["xlsx"])
         if u_wms and u_erp and st.button("🚀 Enviar Auditoria"):
-            # Lógica de processamento e salvar_auditoria_no_banco
             st.success("Auditoria enviada!")
 
     with st.expander("2. Movimentações"):
         u_movs = st.file_uploader("Notas Fiscais", type=["xlsx"], accept_multiple_files=True)
         if u_movs and st.button("📦 Enviar Notas"):
-            # Lógica tratar_notas_fiscais e salvar_no_banco
             st.success("Notas enviadas!")
 
 # --- CORPO PRINCIPAL ---
@@ -177,12 +186,12 @@ if df_base is not None:
 
     f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o produto...")
 
-    # Aplicação de filtros
+    # Filtros
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code:
         dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
-    # Separação Joinville
+    # Divisão Joinville
     lista_joinville = ["Maquinas - Filial", "Service - Matriz", "Service - Filial", "Tools - Filial"]
     dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
@@ -207,15 +216,30 @@ if df_base is not None:
         st.subheader("Auditoria - Unidades Joinville")
         v_jlle = preparar_view(dff_jlle)
         st.dataframe(v_jlle.style.format(fmt_num, decimal=",", thousands="."), use_container_width=True, hide_index=True)
+        
+        # BOTAO EXPORTAR EXCEL JOINVILLE
+        st.download_button(
+            label="📥 Exportar Joinville para Excel",
+            data=para_excel(v_jlle),
+            file_name="auditoria_joinville.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     with tab2:
         st.subheader("Auditoria - Outras Filiais")
         v_outras = preparar_view(dff_outras)
         st.dataframe(v_outras.style.format(fmt_num, decimal=",", thousands="."), use_container_width=True, hide_index=True)
+        
+        # BOTAO EXPORTAR EXCEL FILIAIS
+        st.download_button(
+            label="📥 Exportar Filiais para Excel",
+            data=para_excel(v_outras),
+            file_name="auditoria_filiais.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     with tab3:
         if not dff_jlle.empty:
-            # --- LINHA 1: FINANCEIRO ---
             st.markdown('<div class="section-title">💰 Financeiro (Joinville)</div>', unsafe_allow_html=True)
             v_total = dff_jlle["Vl Total ERP"].sum()
             v_err = dff_jlle["Vl Divergência"].abs().sum()
@@ -226,7 +250,6 @@ if df_base is not None:
             k2.metric("IMPACTO DIVERGENTE", f"R$ {formatar_br(v_err)}")
             k3.metric("ACURACIDADE VALOR", f"{ac_v:.2f}%")
 
-            # --- LINHA 2: QUANTIDADES (RESTAURADO) ---
             st.markdown('<div class="section-title">📦 Itens (Joinville)</div>', unsafe_allow_html=True)
             df_unq = dff_jlle.drop_duplicates(subset=["Empresa", "Filial", "Armazem", "Produto"])
             total_it = len(df_unq)
@@ -235,11 +258,14 @@ if df_base is not None:
 
             k4, k5, k6 = st.columns(3)
             k4.metric("TOTAL DE ITENS", f"{total_it:,}".replace(",", "."))
-            k5.metric("ITENS DIVERGENTE", f"{it_div:,}".replace(",", "."))
+            k5.metric("ITENS COM DIVERGENTES", f"{it_div:,}".replace(",", "."))
             k6.metric("ACURACIDADE ITENS", f"{ac_it:.2f}%")
 
     with tab4:
-        st.info("Utilize a consulta por código para ver movimentações.")
+        if f_code and len(f_code) >= 3:
+            df_nf = buscar_movimentacoes_nuvem(get_engine(), f_code)
+            if not df_nf.empty:
+                st.dataframe(df_nf, use_container_width=True, hide_index=True)
 
 else:
     st.info("💡 Carregue os arquivos na barra lateral para iniciar.")
