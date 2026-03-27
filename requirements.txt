@@ -4,3 +4,4 @@ numpy
 openpyxl
 sqlalchemy
 psycopg2-binary
+xlsxwriter
