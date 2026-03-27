@@ -16,19 +16,74 @@ st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 
 logger = logging.getLogger(__name__)
 
-# CSS para Cards e Radios
+# --- ESTILIZAÇÃO PERSONALIZADA (CORES DO NOVO DASHBOARD) ---
 st.markdown(
     """
     <style>
+    /* Fundo principal da aplicação */
+    [data-testid="stAppViewContainer"] {
+        background-color: #003135;
+    }
+    [data-testid="stHeader"] {
+        background-color: #003135;
+    }
+    
+    /* Fundo da Barra Lateral */
+    [data-testid="stSidebar"] {
+        background-color: #002226;
+    }
+
+    /* Estilização dos Cards de Métricas (Igual ao print: Borda Laranja) */
     div[data-testid="stMetric"] {
-        border: 1px solid #464b5d; padding: 20px; border-radius: 12px;
-        background-color: #0e1117; box-shadow: 2px 2px 10px rgba(0,0,0,0.2);
+        border: 2px solid #ff8c00; 
+        padding: 15px; 
+        border-radius: 10px;
+        background-color: #002226; 
+        box-shadow: 5px 5px 15px rgba(0,0,0,0.3);
+        text-align: center;
     }
+    
+    /* Texto das métricas */
+    div[data-testid="stMetric"] label {
+        color: #ffffff !important;
+        font-weight: bold;
+    }
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: #ffffff !important;
+    }
+
+    /* Filtros (Radios) estilo botões arredondados */
     div[data-testid="stRadio"] > div {
-        flex-direction: row; border: 1px solid #464b5d; padding: 5px 15px;
-        border-radius: 15px; background-color: #0e1117; overflow-x: auto;
+        flex-direction: row; 
+        border: 1px solid #005a61; 
+        padding: 5px 15px;
+        border-radius: 20px; 
+        background-color: #004046;
     }
-    div[data-testid="stRadio"] label { margin-right: 15px; white-space: nowrap; }
+    div[data-testid="stRadio"] label {
+        color: white !important;
+        margin-right: 20px;
+    }
+
+    /* Ajuste de abas */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #004046;
+        border-radius: 4px 4px 0px 0px;
+        padding: 10px 20px;
+        color: white;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #ff8c00 !important;
+        color: white !important;
+    }
+
+    /* Títulos e textos */
+    h1, h2, h3, h4, p {
+        color: white !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -182,6 +237,7 @@ with st.sidebar:
 df_base = carregar_do_banco("auditoria")
 
 if df_base is not None:
+    st.write("## 🚀 Gestão Integrada I9")
     st.write("### 🛠️ Filtros de Seleção")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -269,9 +325,7 @@ if df_base is not None:
                 engine = get_engine()
                 df_nf_res = buscar_movimentacoes_nuvem(engine, f_code)
                 if not df_nf_res.empty:
-                    # --- REMOÇÃO DE DUPLICADAS DO BANCO ---
                     df_nf_res = df_nf_res.drop_duplicates()
-                    
                     st.write(f"Últimas Movimentações do Produto: **{f_code}**")
                     df_nf_res["DIGITACAO"] = pd.to_datetime(df_nf_res["DIGITACAO"]).dt.strftime("%d/%m/%Y")
 
@@ -282,40 +336,22 @@ if df_base is not None:
                         df_nf_res = df_nf_res.drop(columns=["Empresa_Filial_Nome"])
 
                     df_nf_res = df_nf_res.rename(columns={
-                        "TIPOMOVIMENTO"  : "Tipo Movimento",
-                        "DOCUMENTO"      : "Documento",
-                        "DIGITACAO"      : "Digitação",
-                        "NOTA_DEVOLUCAO" : "Nota Devolução",
-                        "PRODUTO"        : "Produto",
-                        "DESCRICAO"      : "Descrição",
-                        "CENTRO_CUSTO"   : "Centro Custo",
-                        "RAZAO_SOCIAL"   : "Razão Social",
-                        "QUANTIDADE"     : "Qtd",
-                        "PRECO_UNITARIO" : "Vl Unit",
-                        "TOTAL"          : "Vl Total",
+                        "TIPOMOVIMENTO"  : "Tipo Movimento", "DOCUMENTO" : "Documento",
+                        "DIGITACAO" : "Digitação", "NOTA_DEVOLUCAO" : "Nota Devolução",
+                        "PRODUTO" : "Produto", "DESCRICAO" : "Descrição",
+                        "CENTRO_CUSTO" : "Centro Custo", "RAZAO_SOCIAL" : "Razão Social",
+                        "QUANTIDADE" : "Qtd", "PRECO_UNITARIO" : "Vl Unit", "TOTAL" : "Vl Total",
                     })
 
                     if "Nota Devolução" in df_nf_res.columns:
-                        df_nf_res["Nota Devolução"] = (
-                            df_nf_res["Nota Devolução"]
-                            .astype(str)
-                            .str.replace(".0", "", regex=False)
-                            .replace("nan", "")
-                        )
-                        df_nf_res["Nota Devolução"] = df_nf_res["Nota Devolução"].apply(
-                            lambda x: x.zfill(9) if x != "" else ""
-                        )
+                        df_nf_res["Nota Devolução"] = df_nf_res["Nota Devolução"].astype(str).str.replace(".0", "", regex=False).replace("nan", "")
+                        df_nf_res["Nota Devolução"] = df_nf_res["Nota Devolução"].apply(lambda x: x.zfill(9) if x != "" else "")
 
                     for col in ["Vl Unit", "Vl Total"]:
                         if col in df_nf_res.columns:
                             df_nf_res[col] = to_float_br(df_nf_res[col])
 
-                    fmt_nf = {
-                        "Vl Unit": "R$ {:,.2f}", "Vl Total": "R$ {:,.2f}",
-                        "Centro Custo": "{:.0f}", "Qtd": "{:,.2f}",
-                    }
-                    fmt_nf = {k: v for k, v in fmt_nf.items() if k in df_nf_res.columns}
-
+                    fmt_nf = {"Vl Unit": "R$ {:,.2f}", "Vl Total": "R$ {:,.2f}", "Centro Custo": "{:.0f}", "Qtd": "{:,.2f}"}
                     st.dataframe(df_nf_res.style.format(fmt_nf, decimal=",", thousands="."), use_container_width=True, hide_index=True)
                 else:
                     st.warning("Nenhuma movimentação encontrada.")
