@@ -40,10 +40,6 @@ st.markdown(
 # ---------------------------------------------------------------------------
 
 def get_engine():
-    """
-    CORREÇÃO #2: erros de conexão são capturados com tipo explícito e exibidos
-    ao usuário em vez de serem silenciados.
-    """
     try:
         conn_url = st.secrets["connections"]["postgresql"]["url"]
         return create_engine(
@@ -58,7 +54,6 @@ def get_engine():
 
 
 def _tabela_existe(engine, tabela):
-    """Verifica se a tabela já existe no banco PostgreSQL."""
     from sqlalchemy import inspect as sa_inspect
     try:
         return sa_inspect(engine).has_table(tabela)
@@ -67,7 +62,6 @@ def _tabela_existe(engine, tabela):
 
 
 def _colunas_batem(engine, tabela, df):
-    """Verifica se as colunas do DataFrame batem com as da tabela no banco."""
     from sqlalchemy import inspect as sa_inspect
     try:
         cols_banco = {c["name"] for c in sa_inspect(engine).get_columns(tabela)}
@@ -78,13 +72,6 @@ def _colunas_batem(engine, tabela, df):
 
 
 def salvar_no_banco(df, tabela):
-    """
-    Estratégia de escrita:
-    - Se a tabela não existe OU as colunas mudaram → replace (recria estrutura).
-    - Se a tabela existe e as colunas batem → append + dedup por chave natural.
-    Isso resolve migrações de esquema (ex: 'NOTA DEVOLUCAO' → 'NOTA_DEVOLUCAO')
-    sem exigir intervenção manual no banco.
-    """
     engine = get_engine()
     if engine is None or df.empty:
         return False
@@ -96,17 +83,10 @@ def salvar_no_banco(df, tabela):
         colunas_ok    = _colunas_batem(engine, tabela, df) if tabela_existe else False
 
         if not tabela_existe or not colunas_ok:
-            # Recria a tabela com a nova estrutura
             df.to_sql(tabela, engine, if_exists="replace", index=False, chunksize=5000)
-            if not tabela_existe:
-                st.info(f"ℹ️ Tabela '{tabela}' criada com sucesso.")
-            else:
-                st.info(f"ℹ️ Estrutura de '{tabela}' atualizada (colunas alteradas).")
         else:
-            # Append seguro: colunas idênticas
             df.to_sql(tabela, engine, if_exists="append", index=False, chunksize=5000)
 
-            # Deduplicação: mantém o registro mais recente por chave natural
             if tabela == "movimentacoes":
                 dedup_sql = sa_text("""
                     DELETE FROM movimentacoes a
@@ -118,19 +98,13 @@ def salvar_no_banco(df, tabela):
                 """)
                 with engine.begin() as conn:
                     conn.execute(dedup_sql)
-
         return True
-
     except Exception as exc:
         st.error(f"❌ Erro ao salvar no banco [{tabela}]: {exc}")
         return False
 
 
 def salvar_auditoria_no_banco(df):
-    """
-    Auditoria é um snapshot: substitui completamente a tabela.
-    Mantido como função separada para deixar a intenção explícita.
-    """
     engine = get_engine()
     if engine is None or df.empty:
         return False
@@ -154,11 +128,14 @@ def carregar_do_banco(tabela):
 
 
 # ---------------------------------------------------------------------------
-# UTILITÁRIOS DE FORMATAÇÃO
+# UTILITÁRIOS
 # ---------------------------------------------------------------------------
 
 def formatar_br(valor):
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def exportar_csv(df):
+    return df.to_csv(index=False).encode('utf-8-sig')
 
 
 # ---------------------------------------------------------------------------
@@ -167,11 +144,6 @@ def formatar_br(valor):
 
 @st.cache_data
 def processar_auditoria(file_wms, file_estoque):
-    """
-    CORREÇÃO #4: agrupamento usa 'sum' para Total_ERP (soma real dos saldos),
-                 não 'max' (que descartava saldos menores).
-    CORREÇÃO #7: erros de coluna ausente retornam mensagem clara ao usuário.
-    """
     df_ref = get_df_empresas().rename(
         columns={
             "Empresa_Cod_Filial": "ID_Empresa_Ref",
@@ -179,20 +151,15 @@ def processar_auditoria(file_wms, file_estoque):
         }
     )
 
-    # --- WMS ---
     df_loc = pd.read_excel(file_wms)
     df_loc.columns = [str(c).strip() for c in df_loc.columns]
 
     if "Utilizado" in df_loc.columns:
         df_loc = df_loc[df_loc["Utilizado"] > 0].copy()
 
-    # CORREÇÃO #7: verifica coluna obrigatória antes de tentar acessá-la
     cols_empresa_filial = [c for c in df_loc.columns if "Empresa" in c and "Filial" in c]
     if not cols_empresa_filial:
-        raise ValueError(
-            "Arquivo WMS não contém coluna com 'Empresa' e 'Filial' no nome. "
-            "Verifique o layout do arquivo enviado."
-        )
+        raise ValueError("Arquivo WMS não contém coluna com 'Empresa' e 'Filial'.")
     col_wms_emp = cols_empresa_filial[0]
 
     df_loc["Aba_Ref"] = (
@@ -228,7 +195,6 @@ def processar_auditoria(file_wms, file_estoque):
         columns={"Utilizado": "Saldo WMS"}
     )
 
-    # --- ERP ---
     dict_abas = pd.read_excel(file_estoque, sheet_name=None)
     lista_dfs = []
     for nome_aba, df_temp in dict_abas.items():
@@ -256,12 +222,11 @@ def processar_auditoria(file_wms, file_estoque):
     df_final["Saldo WMS"] = df_final["Saldo WMS"].fillna(0)
     df_final["Localização"] = df_final["Localização"].fillna("Não Localizado")
 
-    # CORREÇÃO #4: 'sum' para Total_ERP — soma todos os saldos do mesmo produto/armazém
     agrup = (
         df_final.groupby("ID_Cruzamento")
         .agg(
             Total_WMS=("Saldo WMS", "sum"),
-            Total_ERP=("Saldo Atual", "sum"),   # era 'max' — CORRIGIDO
+            Total_ERP=("Saldo Atual", "sum"),
             Qtd_Locais=("ID_Cruzamento", "count"),
         )
         .reset_index()
@@ -312,39 +277,29 @@ df_base = carregar_do_banco("auditoria")
 
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
-
     with st.expander("1. Auditoria (WMS/ERP)"):
         u_wms = st.file_uploader("Upload WMS", type=["xlsx"])
         u_erp = st.file_uploader("Upload ERP", type=["xlsx"])
         if u_wms and u_erp and st.button("🚀 Enviar Auditoria"):
             try:
                 df_aud = processar_auditoria(u_wms, u_erp)
-                # Auditoria é snapshot: substituição total é intencional
                 if salvar_auditoria_no_banco(df_aud):
                     st.success("✅ Auditoria atualizada!")
                     st.rerun()
-            except ValueError as exc:
-                st.error(f"⚠️ Arquivo inválido: {exc}")
             except Exception as exc:
-                st.error(f"❌ Erro inesperado: {exc}")
+                st.error(f"❌ Erro: {exc}")
 
     with st.expander("2. Movimentações (Notas Fiscais)"):
-        u_movs = st.file_uploader(
-            "Arquivos bd_entradas", type=["xlsx"], accept_multiple_files=True
-        )
+        u_movs = st.file_uploader("Arquivos bd_entradas", type=["xlsx"], accept_multiple_files=True)
         if u_movs and st.button("📦 Enviar Notas Fiscais"):
-            with st.spinner("Processando e reduzindo dados..."):
+            with st.spinner("Processando..."):
                 try:
                     df_nf = tratar_notas_fiscais(u_movs)
                     if not df_nf.empty:
                         if salvar_no_banco(df_nf, "movimentacoes"):
-                            st.success(f"✅ {len(df_nf)} registros enviados!")
-                        else:
-                            st.error("❌ Erro ao salvar no banco.")
-                    else:
-                        st.error("⚠️ Nenhuma nota válida encontrada.")
+                            st.success(f"✅ Enviado!")
                 except Exception as exc:
-                    st.error(f"❌ Erro ao processar notas: {exc}")
+                    st.error(f"❌ Erro: {exc}")
 
 # ---------------------------------------------------------------------------
 # PAINEL PRINCIPAL
@@ -355,19 +310,11 @@ if df_base is not None:
     c1, c2, c3 = st.columns(3)
 
     with c1:
-        f_emp = st.radio(
-            "🏢 Empresa",
-            ["Todas"] + sorted(df_base["Empresa"].unique().tolist()),
-            horizontal=True,
-        )
+        f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
     df_t1 = df_base if f_emp == "Todas" else df_base[df_base["Empresa"] == f_emp]
 
     with c2:
-        f_fil = st.radio(
-            "📍 Filial",
-            ["Todas"] + sorted(df_t1["Filial"].unique().tolist()),
-            horizontal=True,
-        )
+        f_fil = st.radio("📍 Filial", ["Todas"] + sorted(df_t1["Filial"].unique().tolist()), horizontal=True)
     df_t2 = df_t1 if f_fil == "Todas" else df_t1[df_t1["Filial"] == f_fil]
 
     with c3:
@@ -380,131 +327,77 @@ if df_base is not None:
     if f_code:
         dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
-    tab1, tab2, tab3 = st.tabs(["📄 Consulta Auditoria", "📈 Indicadores", "🚚 Entradas e Saídas"])
+    # --- SEPARAÇÃO JOINVILLE VS FILIAIS ---
+    lista_joinville = ["Maquinas Filial", "Service Matriz", "Service Filial", "Tools Filial"]
+    dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
+    dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
+
+    # --- CRIAÇÃO DAS ABAS ---
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📍 Auditoria Joinville", 
+        "🚛 Auditoria Filiais", 
+        "📈 Indicadores (Joinville)", 
+        "🚚 Entradas e Saídas"
+    ])
+
+    # Configuração de estilo para as tabelas
+    estilo_tabela = {
+        "Saldo ERP (Total)"   : "{:,.2f}",
+        "Saldo ERP (Rateado)" : "{:,.2f}",
+        "C Unitario"          : "R$ {:,.2f}",
+        "Saldo WMS"           : "{:,.2f}",
+        "Divergência"         : "{:,.2f}",
+        "Vl Divergência"      : "R$ {:,.2f}",
+        "Vl Total ERP"        : "R$ {:,.2f}",
+    }
 
     with tab1:
-        # Renomeia C Unitario -> Vl Unit e reposiciona após Descrição
-        dff_view = dff.rename(columns={"C Unitario": "Vl Unit"})
-        col_order = [c for c in dff_view.columns if c != "Vl Unit"]
-        if "Descrição" in col_order:
-            idx = col_order.index("Descrição") + 1
-            col_order.insert(idx, "Vl Unit")
-        else:
-            col_order.append("Vl Unit")
-        dff_view = dff_view[col_order]
-
-        st.dataframe(
-            dff_view.style.format(
-                {
-                    "Saldo ERP (Total)"   : "{:,.2f}",
-                    "Saldo ERP (Rateado)" : "{:,.2f}",
-                    "Vl Unit"             : "R$ {:,.2f}",
-                    "Saldo WMS"           : "{:,.2f}",
-                    "Divergência"         : "{:,.2f}",
-                    "Vl Divergência"      : "R$ {:,.2f}",
-                    "Vl Total ERP"        : "R$ {:,.2f}",
-                },
-                decimal=",",
-                thousands=".",
-            ),
-            use_container_width=True,
-        )
+        st.subheader("Auditoria - Unidades Joinville")
+        st.dataframe(dff_jlle.style.format(estilo_tabela, decimal=",", thousands="."), use_container_width=True)
+        st.download_button("📥 Exportar Joinville (Excel/CSV)", exportar_csv(dff_jlle), "auditoria_joinville.csv", "text/csv")
 
     with tab2:
-        v_total = dff["Vl Total ERP"].sum()
-        v_div = dff["Vl Divergência"].sum()
-        v_err_abs = dff["Vl Divergência"].abs().sum()
+        st.subheader("Auditoria - Outras Filiais")
+        st.dataframe(dff_outras.style.format(estilo_tabela, decimal=",", thousands="."), use_container_width=True)
+        st.download_button("📥 Exportar Filiais (Excel/CSV)", exportar_csv(dff_outras), "auditoria_filiais.csv", "text/csv")
+
+    with tab3:
+        # CÁLCULOS BASEADOS APENAS EM JOINVILLE
+        v_total = dff_jlle["Vl Total ERP"].sum()
+        v_div = dff_jlle["Vl Divergência"].sum()
+        v_err_abs = dff_jlle["Vl Divergência"].abs().sum()
         ac_v = (1 - (v_err_abs / v_total)) * 100 if v_total > 0 else 0
 
-        df_unq = dff.drop_duplicates(subset=["Empresa", "Filial", "Armazem", "Produto"])
+        df_unq = dff_jlle.drop_duplicates(subset=["Empresa", "Filial", "Armazem", "Produto"])
         total_it = len(df_unq)
         it_div = len(df_unq[df_unq["Status"] == "Divergente"])
         ac_it = (1 - (it_div / total_it)) * 100 if total_it > 0 else 0
 
-        st.markdown("#### 💰 Financeiro")
+        st.markdown("#### 💰 Financeiro (Joinville)")
         k1, k2, k3 = st.columns(3)
         k1.metric("Valor em Estoque", f"R$ {formatar_br(v_total)}")
         k2.metric("Impacto Divergente", f"R$ {formatar_br(v_div)}")
         k3.metric("Acuracidade Valor", f"{ac_v:.2f}%")
 
-        st.markdown("#### 📦 Itens")
+        st.markdown("#### 📦 Itens (Joinville)")
         k4, k5, k6 = st.columns(3)
         k4.metric("Total de Itens", f"{total_it:,}".replace(",", "."))
         k5.metric("Itens Divergentes", f"{it_div:,}".replace(",", "."))
         k6.metric("Acuracidade Itens", f"{ac_it:.2f}%")
 
-    with tab3:
+    with tab4:
         if f_code and len(f_code) >= 3:
-            # CORREÇÃO #3: trata erros de consulta com mensagem clara
             try:
                 engine = get_engine()
                 df_nf_res = buscar_movimentacoes_nuvem(engine, f_code)
                 if not df_nf_res.empty:
-                    st.write(f"Últimas Movimentações do Produto: **{f_code}**")
-                    df_nf_res["DIGITACAO"] = pd.to_datetime(
-                        df_nf_res["DIGITACAO"]
-                    ).dt.strftime("%d/%m/%Y")
-
-                    # Separa Empresa_Filial_Nome em duas colunas: Empresa e Filial
-                    if "Empresa_Filial_Nome" in df_nf_res.columns:
-                        split = df_nf_res["Empresa_Filial_Nome"].str.split(" - ", n=1, expand=True)
-                        df_nf_res.insert(0, "Filial", split[1].fillna(""))
-                        df_nf_res.insert(0, "Empresa", split[0].fillna(""))
-                        df_nf_res = df_nf_res.drop(columns=["Empresa_Filial_Nome"])
-
-                    # Renomeia e formata cabeçalhos para exibição
-                    df_nf_res = df_nf_res.rename(columns={
-                        "TIPOMOVIMENTO"  : "Tipo Movimento",
-                        "DOCUMENTO"      : "Documento",
-                        "DIGITACAO"      : "Digitação",
-                        "NOTA_DEVOLUCAO" : "Nota Devolução",
-                        "PRODUTO"        : "Produto",
-                        "DESCRICAO"      : "Descrição",
-                        "CENTRO_CUSTO"   : "Centro Custo",
-                        "RAZAO_SOCIAL"   : "Razão Social",
-                        "QUANTIDADE"     : "Qtd",
-                        "PRECO_UNITARIO" : "Vl Unit",
-                        "TOTAL"          : "Vl Total",
-                    })
-                    # Converte colunas numéricas que podem vir como string no formato BR
-                    def to_float_br(serie):
-                        return pd.to_numeric(
-                            serie.astype(str)
-                                 .str.replace(r"[^\d,.-]", "", regex=True)
-                                 .str.replace(".", "", regex=False)
-                                 .str.replace(",", ".", regex=False),
-                            errors="coerce"
-                        )
-
-                    for col in ["Vl Unit", "Vl Total"]:
-                        if col in df_nf_res.columns:
-                            df_nf_res[col] = to_float_br(df_nf_res[col])
-
-                    # Garante tipos corretos para Centro Custo e Qtd
-                    if "Centro Custo" in df_nf_res.columns:
-                        df_nf_res["Centro Custo"] = pd.to_numeric(df_nf_res["Centro Custo"], errors="coerce")
-                    if "Qtd" in df_nf_res.columns:
-                        df_nf_res["Qtd"] = pd.to_numeric(df_nf_res["Qtd"], errors="coerce")
-
-                    fmt = {
-                        "Vl Unit"      : "R$ {:,.2f}",
-                        "Vl Total"     : "R$ {:,.2f}",
-                        "Centro Custo" : "{:.0f}",
-                        "Qtd"          : "{:,.2f}",
-                    }
-                    # Remove do fmt colunas ausentes
-                    fmt = {k: v for k, v in fmt.items() if k in df_nf_res.columns}
-
-                    st.dataframe(
-                        df_nf_res.style.format(fmt, decimal=",", thousands="."),
-                        use_container_width=True,
-                    )
+                    st.write(f"Últimas Movimentações: **{f_code}**")
+                    df_nf_res["DIGITACAO"] = pd.to_datetime(df_nf_res["DIGITACAO"]).dt.strftime("%d/%m/%Y")
+                    st.dataframe(df_nf_res, use_container_width=True)
                 else:
-                    st.warning("Nenhuma movimentação encontrada para este produto.")
-            except ConnectionError as exc:
-                st.error(f"⚠️ Sem conexão com o banco: {exc}")
-            except RuntimeError as exc:
-                st.error(f"❌ Erro na consulta: {exc}")
+                    st.warning("Nenhuma movimentação encontrada.")
+            except Exception as exc:
+                st.error(f"❌ Erro: {exc}")
         else:
             st.info("Digite o código no campo de busca para ver o histórico.")
 
