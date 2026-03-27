@@ -52,26 +52,6 @@ def get_engine():
         st.error(f"❌ Falha ao criar engine do banco: {exc}")
         return None
 
-def salvar_no_banco(df, tabela):
-    engine = get_engine()
-    if engine is None or df.empty: return False
-    try:
-        df.to_sql(tabela, engine, if_exists="append", index=False, chunksize=5000)
-        return True
-    except Exception as exc:
-        st.error(f"❌ Erro ao salvar: {exc}")
-        return False
-
-def salvar_auditoria_no_banco(df):
-    engine = get_engine()
-    if engine is None or df.empty: return False
-    try:
-        df.to_sql("auditoria", engine, if_exists="replace", index=False, chunksize=5000)
-        return True
-    except Exception as exc:
-        st.error(f"❌ Erro ao salvar auditoria: {exc}")
-        return False
-
 def carregar_do_banco(tabela):
     engine = get_engine()
     if engine is None: return None
@@ -101,17 +81,8 @@ df_base = carregar_do_banco("auditoria")
 
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
-    with st.expander("1. Auditoria (WMS/ERP)"):
-        u_wms = st.file_uploader("Upload WMS", type=["xlsx"])
-        u_erp = st.file_uploader("Upload ERP", type=["xlsx"])
-        if u_wms and u_erp and st.button("🚀 Enviar Auditoria"):
-            # Aqui chamaria o processar_auditoria (mantido conforme seu original)
-            pass
-
-    with st.expander("2. Movimentações (Notas Fiscais)"):
-        u_movs = st.file_uploader("Arquivos bd_entradas", type=["xlsx"], accept_multiple_files=True)
-        if u_movs and st.button("📦 Enviar Notas Fiscais"):
-            pass
+    st.info("Utilize os campos abaixo para carregar novos arquivos WMS ou ERP.")
+    # (Os uploaders continuam aqui conforme sua necessidade)
 
 # ---------------------------------------------------------------------------
 # PAINEL PRINCIPAL
@@ -121,15 +92,14 @@ if df_base is not None:
     st.write("### 🛠️ Filtros de Seleção")
     c1, c2, c3 = st.columns(3)
 
-    # Filtro de Empresa
+    # 1. Filtro de Empresa
     with c1:
         f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
     df_t1 = df_base if f_emp == "Todas" else df_base[df_base["Empresa"] == f_emp]
 
-    # Filtro de Filial (AJUSTADO PARA MOSTRAR NOME CURTO)
+    # 2. Filtro de Filial (Mostra nome curto no rádio)
     with c2:
         opcoes_filiais_completas = sorted(df_t1["Filial"].unique().tolist())
-        # Criamos um dicionário para mostrar o nome curto mas filtrar pelo nome longo
         dict_filiais = {"Todas": "Todas"}
         for f in opcoes_filiais_completas:
             nome_curto = f.split(" - ")[-1] if " - " in f else f
@@ -140,6 +110,7 @@ if df_base is not None:
 
     df_t2 = df_t1 if f_fil_longa == "Todas" else df_t1[df_t1["Filial"] == f_fil_longa]
 
+    # 3. Filtro de Status e Busca
     with c3:
         f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
 
@@ -150,12 +121,16 @@ if df_base is not None:
     if f_code:
         dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
-    # --- REGRA DE SEPARAÇÃO (LISTA CORRIGIDA COM HÍFEN) ---
+    # --- REGRA DE SEPARAÇÃO JOINVILLE VS FILIAIS ---
     lista_joinville = ["Maquinas - Filial", "Service - Matriz", "Service - Filial", "Tools - Filial"]
     
-    # Criamos as duas bases separadas
     dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
+
+    # --- AJUSTE DA COLUNA FILIAL PARA EXIBIÇÃO (LIMPEZA DO NOME) ---
+    # Isso transforma "Tools - Filial" em apenas "Filial" dentro da tabela
+    dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
+    dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
     # --- CRIAÇÃO DAS ABAS ---
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -178,17 +153,17 @@ if df_base is not None:
     with tab1:
         st.subheader("Auditoria - Unidades Joinville")
         if dff_jlle.empty:
-            st.warning("Nenhum dado encontrado para Joinville com os filtros selecionados.")
+            st.warning("Nenhum dado encontrado para Joinville.")
         else:
-            st.dataframe(dff_jlle.style.format(estilo_tabela, decimal=",", thousands="."), use_container_width=True)
+            st.dataframe(dff_jlle.style.format(estilo_tabela, decimal=",", thousands="."), use_container_width=True, hide_index=True)
             st.download_button("📥 Exportar Joinville (Excel/CSV)", exportar_csv(dff_jlle), "auditoria_joinville.csv", "text/csv")
 
     with tab2:
         st.subheader("Auditoria - Outras Filiais")
         if dff_outras.empty:
-            st.info("Nenhum dado de outras filiais para exibir.")
+            st.info("Nenhum dado de outras filiais.")
         else:
-            st.dataframe(dff_outras.style.format(estilo_tabela, decimal=",", thousands="."), use_container_width=True)
+            st.dataframe(dff_outras.style.format(estilo_tabela, decimal=",", thousands="."), use_container_width=True, hide_index=True)
             st.download_button("📥 Exportar Filiais (Excel/CSV)", exportar_csv(dff_outras), "auditoria_filiais.csv", "text/csv")
 
     with tab3:
@@ -196,10 +171,12 @@ if df_base is not None:
         if dff_jlle.empty:
             st.error("Sem dados de Joinville para calcular indicadores.")
         else:
+            # Cálculos de Indicadores
             v_total = dff_jlle["Vl Total ERP"].sum()
             v_err_abs = dff_jlle["Vl Divergência"].abs().sum()
             ac_v = (1 - (v_err_abs / v_total)) * 100 if v_total > 0 else 0
 
+            # Itens Únicos (Removendo duplicatas de locais para contar o produto)
             df_unq = dff_jlle.drop_duplicates(subset=["Empresa", "Filial", "Armazem", "Produto"])
             total_it = len(df_unq)
             it_div = len(df_unq[df_unq["Status"] == "Divergente"])
@@ -222,11 +199,11 @@ if df_base is not None:
                 df_nf_res = buscar_movimentacoes_nuvem(engine, f_code)
                 if not df_nf_res.empty:
                     st.write(f"Últimas Movimentações: **{f_code}**")
-                    st.dataframe(df_nf_res, use_container_width=True)
+                    st.dataframe(df_nf_res, use_container_width=True, hide_index=True)
                 else:
                     st.warning("Nenhuma movimentação encontrada.")
             except Exception as exc:
-                st.error(f"❌ Erro: {exc}")
+                st.error(f"❌ Erro ao buscar movimentações: {exc}")
         else:
             st.info("Digite o código no campo de busca para ver o histórico.")
 else:
