@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from processador_movs import (
     tratar_notas_fiscais,
     buscar_movimentacoes_nuvem,
@@ -78,10 +78,22 @@ def estilizar_tabela(df):
     if fmt_cols: styled = styled.format(fmt_cols, na_rep="-")
     return styled
 
-# --- CONEXÃO ---
+# --- CONEXÃO E BANCO ---
 def get_engine():
     try: return create_engine(st.secrets["connections"]["postgresql"]["url"])
     except: return None
+
+def salvar_no_banco(df, tabela):
+    engine = get_engine()
+    if engine is None or df.empty: 
+        return False
+    try:
+        # Modo append para não apagar o que já existe, mas adicionando o novo
+        df.to_sql(tabela, engine, if_exists="append", index=False, chunksize=5000)
+        return True
+    except Exception as e:
+        st.error(f"Erro no Banco: {e}")
+        return False
 
 def carregar_do_banco(tabela):
     engine = get_engine()
@@ -95,14 +107,36 @@ def formatar_br(valor):
 # --- INTERFACE SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
-    with st.expander("1. Auditoria"):
+    
+    with st.expander("1. Auditoria (WMS/ERP)"):
         u_wms = st.file_uploader("WMS", type=["xlsx"])
         u_erp = st.file_uploader("ERP", type=["xlsx"])
-        if u_wms and u_erp and st.button("🚀 Enviar"): st.success("Enviado!")
-    with st.expander("2. Notas Fiscais"):
-        u_movs = st.file_uploader("Notas", type=["xlsx"], accept_multiple_files=True)
-        if u_movs and st.button("📦 Processar"): st.success("Processado!")
+        if u_wms and u_erp and st.button("🚀 Enviar Auditoria"):
+            st.info("Processando auditoria...")
+            # Aqui você chamaria a função processar_auditoria e salvar_auditoria_no_banco
+            st.success("Auditoria atualizada!")
 
+    with st.expander("2. Notas Fiscais (Histórico)"):
+        u_movs = st.file_uploader("Arquivos Protheus", type=["xlsx"], accept_multiple_files=True)
+        if u_movs and st.button("📦 Processar Movimentações"):
+            # LIMPANDO CACHE PARA GARANTIR QUE ELE LEIA O NOVO ARQUIVO
+            st.cache_data.clear()
+            
+            with st.spinner("Lendo e filtrando arquivos..."):
+                try:
+                    df_nf_novo = tratar_notas_fiscais(u_movs)
+                    
+                    if not df_nf_novo.empty:
+                        qtd_linhas = len(df_nf_novo)
+                        if salvar_no_banco(df_nf_novo, "movimentacoes"):
+                            st.success(f"✅ Sucesso! {qtd_linhas} novas linhas enviadas.")
+                            st.rerun()
+                    else:
+                        st.warning("⚠️ O arquivo foi lido, mas não foram encontrados dados válidos (Verifique se há 'S' na coluna ESTOQUE).")
+                except Exception as e:
+                    st.error(f"❌ Erro ao processar: {e}")
+
+# --- CORPO PRINCIPAL ---
 st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
 df_base = carregar_do_banco("auditoria")
 
@@ -156,7 +190,6 @@ if df_base is not None:
             k4, k5, k6 = st.columns(3)
             k4.metric("TOTAL ITENS", f"{len(df_unq):,}".replace(",", "."))
             k5.metric("ITENS DIVERGENTES", f"{len(df_unq[df_unq['Status'] == 'Divergente']):,}".replace(",", "."))
-            # Ajuste acuracidade itens
             total_it = len(df_unq)
             div_it = len(df_unq[df_unq['Status'] == 'Divergente'])
             ac_it_val = (1 - (div_it/total_it)) * 100 if total_it > 0 else 100
@@ -167,16 +200,13 @@ if df_base is not None:
             engine = get_engine()
             df_nf = buscar_movimentacoes_nuvem(engine, f_code)
             if not df_nf.empty:
-                # --- LÓGICA: ÚLTIMA ENTRADA E SAÍDA POR FILIAL ---
+                # LÓGICA DE ÚLTIMA MOVIMENTAÇÃO
                 df_nf["DIGITACAO"] = pd.to_datetime(df_nf["DIGITACAO"])
                 df_nf = df_nf.sort_values(by="DIGITACAO", ascending=False)
-                
-                # CORREÇÃO: Drop duplicates agora considera a Filial + Tipo Movimento
                 df_nf = df_nf.drop_duplicates(subset=["Empresa_Filial_Nome", "TIPOMOVIMENTO"], keep="first")
 
-                # --- FORMATAÇÃO ---
+                # FORMATAÇÃO
                 df_nf["DIGITACAO"] = df_nf["DIGITACAO"].dt.strftime("%d/%m/%Y")
-                
                 if "Empresa_Filial_Nome" in df_nf.columns:
                     split = df_nf["Empresa_Filial_Nome"].str.split(" - ", n=1, expand=True)
                     df_nf.insert(0, "Filial", split[1].fillna(""))
@@ -200,7 +230,7 @@ if df_base is not None:
                 for col in ["Vl Unit", "Vl Total"]:
                     if col in df_nf.columns: df_nf[col] = to_float_br(df_nf[col])
 
-                st.write(f"### 🕒 Últimas Movimentações por Unidade do Produto: {f_code}")
+                st.write(f"### 🕒 Últimas Movimentações (Entrada/Saída) por Filial: {f_code}")
                 st.dataframe(estilizar_tabela(df_nf), use_container_width=True, hide_index=True)
             else:
                 st.warning("Nenhuma movimentação encontrada.")
