@@ -85,7 +85,6 @@ def formatar_br(valor):
 def exportar_csv(df):
     return df.to_csv(index=False).encode('utf-8-sig')
 
-# Função para converter números padrão BR do seu código original
 def to_float_br(serie):
     return pd.to_numeric(
         serie.astype(str)
@@ -208,16 +207,13 @@ if df_base is not None:
     if f_code:
         dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
-    # --- SEPARAÇÃO JOINVILLE VS FILIAIS ---
     lista_joinville = ["Maquinas - Filial", "Service - Matriz", "Service - Filial", "Tools - Filial"]
     dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
 
-    # Limpeza do nome da filial para exibição nas tabelas de auditoria
     dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
     dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
-    # Função para ordem das colunas (Vl Unit após Descrição)
     def preparar_view(df):
         if df.empty: return df
         df_view = df.rename(columns={"C Unitario": "Vl Unit"})
@@ -275,7 +271,6 @@ if df_base is not None:
                 if not df_nf_res.empty:
                     st.write(f"Últimas Movimentações do Produto: **{f_code}**")
                     
-                    # Restaurando lógica de datas e separação Empresa/Filial
                     df_nf_res["DIGITACAO"] = pd.to_datetime(df_nf_res["DIGITACAO"]).dt.strftime("%d/%m/%Y")
 
                     if "Empresa_Filial_Nome" in df_nf_res.columns:
@@ -284,7 +279,6 @@ if df_base is not None:
                         df_nf_res.insert(0, "Empresa", split[0].fillna(""))
                         df_nf_res = df_nf_res.drop(columns=["Empresa_Filial_Nome"])
 
-                    # Renomeando exatamente como no seu código original
                     df_nf_res = df_nf_res.rename(columns={
                         "TIPOMOVIMENTO"  : "Tipo Movimento",
                         "DOCUMENTO"      : "Documento",
@@ -299,26 +293,34 @@ if df_base is not None:
                         "TOTAL"          : "Vl Total",
                     })
 
+                    # --- CORREÇÃO DA NOTA DEVOLUÇÃO (ZEROS À ESQUERDA) ---
+                    if "Nota Devolução" in df_nf_res.columns:
+                        df_nf_res["Nota Devolução"] = (
+                            df_nf_res["Nota Devolução"]
+                            .astype(str)
+                            .str.replace(".0", "", regex=False)
+                            .replace("nan", "")
+                        )
+                        # Aplica zfill de 9 dígitos apenas onde não estiver vazio
+                        df_nf_res["Nota Devolução"] = df_nf_res["Nota Devolução"].apply(
+                            lambda x: x.zfill(9) if x != "" else ""
+                        )
+
                     for col in ["Vl Unit", "Vl Total"]:
                         if col in df_nf_res.columns:
                             df_nf_res[col] = to_float_br(df_nf_res[col])
 
                     fmt_nf = {
-                        "Vl Unit"      : "R$ {:,.2f}",
-                        "Vl Total"     : "R$ {:,.2f}",
-                        "Centro Custo" : "{:.0f}",
-                        "Qtd"          : "{:,.2f}",
+                        "Vl Unit": "R$ {:,.2f}", "Vl Total": "R$ {:,.2f}",
+                        "Centro Custo": "{:.0f}", "Qtd": "{:,.2f}",
                     }
                     fmt_nf = {k: v for k, v in fmt_nf.items() if k in df_nf_res.columns}
 
-                    st.dataframe(
-                        df_nf_res.style.format(fmt_nf, decimal=",", thousands="."),
-                        use_container_width=True, hide_index=True
-                    )
+                    st.dataframe(df_nf_res.style.format(fmt_nf, decimal=",", thousands="."), use_container_width=True, hide_index=True)
                 else:
                     st.warning("Nenhuma movimentação encontrada.")
             except Exception as exc:
-                st.error(f"❌ Erro ao buscar movimentações: {exc}")
+                st.error(f"❌ Erro: {exc}")
         else:
             st.info("Digite o código no campo de busca para ver o histórico.")
 else:
