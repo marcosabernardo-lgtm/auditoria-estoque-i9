@@ -15,7 +15,7 @@ from processador_movs import (
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 
-# 2. CSS CUSTOMIZADO (CORES OFICIAIS #005562 e #EC6E21)
+# 2. CSS CUSTOMIZADO (TEMA OFICIAL #005562 e #EC6E21)
 st.markdown(
     """
     <style>
@@ -54,7 +54,6 @@ def to_float_br(serie):
 
 def estilizar_tabela(df):
     fmt_cols = {}
-    # CORREÇÃO: Adicionada as colunas de Divergência e Total ERP na formatação R$
     for col in df.columns:
         if any(x in col for x in ["Saldo", "Divergência", "Qtd"]) and "Vl" not in col: 
             fmt_cols[col] = "{:,.2f}"
@@ -79,7 +78,7 @@ def estilizar_tabela(df):
     if fmt_cols: styled = styled.format(fmt_cols, na_rep="-")
     return styled
 
-# --- CONEXÃO E CARGA ---
+# --- CONEXÃO ---
 def get_engine():
     try: return create_engine(st.secrets["connections"]["postgresql"]["url"])
     except: return None
@@ -108,6 +107,7 @@ st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_h
 df_base = carregar_do_banco("auditoria")
 
 if df_base is not None:
+    # FILTROS
     c1, c2, c3 = st.columns(3)
     with c1: f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
     df_t1 = df_base if f_emp == "Todas" else df_base[df_base["Empresa"] == f_emp]
@@ -141,12 +141,7 @@ if df_base is not None:
     with tab1:
         v_jlle = preparar_view(dff_jlle)
         if not v_jlle.empty: st.dataframe(estilizar_tabela(v_jlle), use_container_width=True, hide_index=True)
-        st.download_button("📥 Excel Joinville", para_excel(v_jlle), "joinville.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    with tab2:
-        v_out = preparar_view(dff_outras)
-        if not v_out.empty: st.dataframe(estilizar_tabela(v_out), use_container_width=True, hide_index=True)
-        st.download_button("📥 Excel Filiais", para_excel(v_out), "filiais.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("📥 Excel Joinville", para_excel(v_jlle), "joinville.xlsx")
 
     with tab3:
         if not dff_jlle.empty:
@@ -168,8 +163,18 @@ if df_base is not None:
             engine = get_engine()
             df_nf = buscar_movimentacoes_nuvem(engine, f_code)
             if not df_nf.empty:
-                df_nf = df_nf.drop_duplicates()
-                df_nf["DIGITACAO"] = pd.to_datetime(df_nf["DIGITACAO"]).dt.strftime("%d/%m/%Y")
+                # --- LÓGICA: PEGAR O ÚLTIMO DE CADA TIPO ---
+                # 1. Garantir que a coluna de data é do tipo datetime para ordenar
+                df_nf["DIGITACAO"] = pd.to_datetime(df_nf["DIGITACAO"])
+                
+                # 2. Ordenar pela data (mais recente primeiro)
+                df_nf = df_nf.sort_values(by="DIGITACAO", ascending=False)
+                
+                # 3. Manter apenas a primeira linha de cada Tipo de Movimento (Entrada/Saída)
+                df_nf = df_nf.drop_duplicates(subset=["TIPOMOVIMENTO"], keep="first")
+
+                # --- FORMATAÇÃO VISUAL (RESTAURADA) ---
+                df_nf["DIGITACAO"] = df_nf["DIGITACAO"].dt.strftime("%d/%m/%Y")
                 
                 if "Empresa_Filial_Nome" in df_nf.columns:
                     split = df_nf["Empresa_Filial_Nome"].str.split(" - ", n=1, expand=True)
@@ -184,18 +189,17 @@ if df_base is not None:
                     "QUANTIDADE": "Qtd", "PRECO_UNITARIO": "Vl Unit", "TOTAL": "Vl Total"
                 })
 
-                # CORREÇÃO: Limpeza e ZFILL da Nota de Devolução
                 if "Nota Devolução" in df_nf.columns:
-                    df_nf["Nota Devolução"] = df_nf["Nota Devolução"].astype(str).str.replace(".0", "", regex=False).replace("None", "").replace("nan", "")
-                    # Preenche com zeros à esquerda até completar 9 dígitos se houver número
+                    df_nf["Nota Devolução"] = df_nf["Nota Devolução"].astype(str).str.replace(".0", "", regex=False).replace(["None", "nan"], "")
                     df_nf["Nota Devolução"] = df_nf["Nota Devolução"].apply(lambda x: x.zfill(9) if x != "" else "")
                 
                 if "Centro Custo" in df_nf.columns:
-                    df_nf["Centro Custo"] = df_nf["Centro Custo"].astype(str).str.replace(".0", "", regex=False).replace("nan", "")
+                    df_nf["Centro Custo"] = df_nf["Centro Custo"].astype(str).str.replace(".0", "", regex=False).replace(["None", "nan"], "")
                 
                 for col in ["Vl Unit", "Vl Total"]:
                     if col in df_nf.columns: df_nf[col] = to_float_br(df_nf[col])
 
+                st.write(f"### 🕒 Última Entrada e Saída do Produto: {f_code}")
                 st.dataframe(estilizar_tabela(df_nf), use_container_width=True, hide_index=True)
             else:
                 st.warning("Nenhuma movimentação encontrada.")
