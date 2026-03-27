@@ -156,24 +156,25 @@ if df_base is not None:
             k4, k5, k6 = st.columns(3)
             k4.metric("TOTAL ITENS", f"{len(df_unq):,}".replace(",", "."))
             k5.metric("ITENS DIVERGENTES", f"{len(df_unq[df_unq['Status'] == 'Divergente']):,}".replace(",", "."))
-            k6.metric("ACURACIDADE ITENS", f"{(1 - (len(df_unq[df_unq['Status'] == 'Divergente'])/len(df_unq)))*100:.2f}%")
+            # Ajuste acuracidade itens
+            total_it = len(df_unq)
+            div_it = len(df_unq[df_unq['Status'] == 'Divergente'])
+            ac_it_val = (1 - (div_it/total_it)) * 100 if total_it > 0 else 100
+            k6.metric("ACURACIDADE ITENS", f"{ac_it_val:.2f}%")
 
     with tab4:
         if f_code and len(f_code) >= 3:
             engine = get_engine()
             df_nf = buscar_movimentacoes_nuvem(engine, f_code)
             if not df_nf.empty:
-                # --- LÓGICA: PEGAR O ÚLTIMO DE CADA TIPO ---
-                # 1. Garantir que a coluna de data é do tipo datetime para ordenar
+                # --- LÓGICA: ÚLTIMA ENTRADA E SAÍDA POR FILIAL ---
                 df_nf["DIGITACAO"] = pd.to_datetime(df_nf["DIGITACAO"])
-                
-                # 2. Ordenar pela data (mais recente primeiro)
                 df_nf = df_nf.sort_values(by="DIGITACAO", ascending=False)
                 
-                # 3. Manter apenas a primeira linha de cada Tipo de Movimento (Entrada/Saída)
-                df_nf = df_nf.drop_duplicates(subset=["TIPOMOVIMENTO"], keep="first")
+                # CORREÇÃO: Drop duplicates agora considera a Filial + Tipo Movimento
+                df_nf = df_nf.drop_duplicates(subset=["Empresa_Filial_Nome", "TIPOMOVIMENTO"], keep="first")
 
-                # --- FORMATAÇÃO VISUAL (RESTAURADA) ---
+                # --- FORMATAÇÃO ---
                 df_nf["DIGITACAO"] = df_nf["DIGITACAO"].dt.strftime("%d/%m/%Y")
                 
                 if "Empresa_Filial_Nome" in df_nf.columns:
@@ -199,7 +200,7 @@ if df_base is not None:
                 for col in ["Vl Unit", "Vl Total"]:
                     if col in df_nf.columns: df_nf[col] = to_float_br(df_nf[col])
 
-                st.write(f"### 🕒 Última Entrada e Saída do Produto: {f_code}")
+                st.write(f"### 🕒 Últimas Movimentações por Unidade do Produto: {f_code}")
                 st.dataframe(estilizar_tabela(df_nf), use_container_width=True, hide_index=True)
             else:
                 st.warning("Nenhuma movimentação encontrada.")
