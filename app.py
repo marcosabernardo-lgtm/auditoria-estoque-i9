@@ -15,7 +15,7 @@ from processador_movs import (
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 
-# 2. CSS CUSTOMIZADO (CORES OFICIAIS #005562 e #EC6E21)
+# 2. CSS CUSTOMIZADO (INTEGRAÇÃO TOTAL COM O TEMA)
 st.markdown(
     """
     <style>
@@ -42,13 +42,6 @@ st.markdown(
         font-size: 2.2rem;
         margin-bottom: 25px;
     }
-    .section-title {
-        color: #ffffff;
-        font-size: 1.2rem;
-        font-weight: 600;
-        margin-top: 20px;
-        margin-bottom: 10px;
-    }
 
     /* CARDS DE MÉTRICAS */
     div[data-testid="stMetric"] {
@@ -58,17 +51,8 @@ st.markdown(
         padding: 15px;
         text-align: center;
     }
-    div[data-testid="stMetricValue"] > div {
-        color: #ffffff !important;
-        font-size: 2.2rem !important;
-        font-weight: 800 !important;
-    }
-    div[data-testid="stMetric"] label {
-        color: #ffffff !important;
-        opacity: 0.8;
-    }
 
-    /* ABAS (NAVBAR) */
+    /* NAVBAR / ABAS */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
     }
@@ -82,15 +66,7 @@ st.markdown(
         background-color: #EC6E21 !important;
     }
 
-    /* FILTROS E INPUTS */
-    div[data-testid="stRadio"] > div {
-        background-color: #004550 !important;
-        border: 1px solid #007687 !important;
-        border-radius: 10px;
-    }
-    div[data-testid="stRadio"] label, .stTextInput label {
-        color: white !important;
-    }
+    /* INPUT DE BUSCA */
     .stTextInput input {
         background-color: #004550 !important;
         color: white !important;
@@ -119,9 +95,7 @@ def para_excel(df):
     processed_data = output.getvalue()
     return processed_data
 
-# --- ESTILO DA TABELA VIA PANDAS STYLER ---
-# CSS externo não penetra o iframe do st.dataframe.
-# A única forma de mudar cores dentro da tabela é via Pandas Styler.
+# --- FUNÇÃO DE ESTILIZAÇÃO DA TABELA (REFINADA PARA MODO ESCURO) ---
 def estilizar_tabela(df):
     fmt_num = {}
     for col in df.columns:
@@ -131,14 +105,17 @@ def estilizar_tabela(df):
             fmt_num[col] = "R$ {:,.2f}"
 
     def colorir_linha(row):
-        return ['background-color: #ffffff; color: #1a2b35; font-size: 0.84rem;'] * len(row)
+        # Fundo azul marinho muito escuro para as linhas padrão
+        return ['background-color: #00323a; color: #ffffff; font-size: 0.84rem;'] * len(row)
 
     def colorir_status(val):
         if val == "Divergente":
-            return 'background-color: #fff0eb; color: #c0392b; font-weight: bold;'
+            # Vermelho escuro/vinho para erro
+            return 'background-color: #5a1a1a; color: #ffb3b3; font-weight: bold; border: 1px solid #ff4b4b;'
         elif val == "OK":
-            return 'background-color: #eafaf1; color: #1e8449; font-weight: bold;'
-        return 'background-color: #ffffff; color: #1a2b35;'
+            # Verde escuro para sucesso
+            return 'background-color: #1a4a32; color: #b3ffcc; font-weight: bold; border: 1px solid #00d488;'
+        return ''
 
     styled = df.style.apply(colorir_linha, axis=1)
 
@@ -149,35 +126,26 @@ def estilizar_tabela(df):
         {
             'selector': 'thead th',
             'props': [
-                ('background-color', '#005562'),
-                ('color', 'white'),
+                ('background-color', '#002229'), # Cabeçalho quase preto/petróleo
+                ('color', '#ffffff'),
                 ('font-weight', '700'),
-                ('font-size', '0.80rem'),
+                ('border-bottom', '2px solid #EC6E21'), # Linha laranja divisória
                 ('text-transform', 'uppercase'),
-                ('letter-spacing', '0.04em'),
-                ('border-bottom', '2px solid #EC6E21'),
-                ('padding', '10px 8px'),
             ]
         },
         {
             'selector': 'tbody tr:nth-child(even) td',
             'props': [
-                ('background-color', '#f0f6f8'),
-                ('color', '#1a2b35'),
+                ('background-color', '#00404a'), # Zebra: azul um pouco mais claro
             ]
         },
         {
             'selector': 'td',
             'props': [
-                ('padding', '8px 10px'),
-                ('border-bottom', '1px solid #dde8ec'),
-                ('white-space', 'nowrap'),
+                ('padding', '8px 12px'),
+                ('border-bottom', '1px solid #005562'), # Linha sutil entre registros
             ]
-        },
-        {
-            'selector': 'table',
-            'props': [('border-collapse', 'collapse'), ('width', '100%')]
-        },
+        }
     ])
 
     if fmt_num:
@@ -201,27 +169,21 @@ def carregar_do_banco(tabela):
 def formatar_br(valor):
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- INTERFACE SIDEBAR ---
+# --- INTERFACE ---
+st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
+
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
-    with st.expander("1. Auditoria (WMS/ERP)"):
-        u_wms = st.file_uploader("Upload WMS", type=["xlsx"])
-        u_erp = st.file_uploader("Upload ERP", type=["xlsx"])
-        if u_wms and u_erp and st.button("🚀 Enviar Auditoria"):
-            st.success("Auditoria enviada!")
-
-    with st.expander("2. Movimentações"):
-        u_movs = st.file_uploader("Notas Fiscais", type=["xlsx"], accept_multiple_files=True)
-        if u_movs and st.button("📦 Enviar Notas"):
-            st.success("Notas enviadas!")
-
-# --- CORPO PRINCIPAL ---
-st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
+    with st.expander("Upload de Dados"):
+        u_wms = st.file_uploader("WMS", type=["xlsx"])
+        u_erp = st.file_uploader("ERP", type=["xlsx"])
+        if u_wms and u_erp and st.button("🚀 Processar"):
+            st.success("Dados recebidos!")
 
 df_base = carregar_do_banco("auditoria")
 
 if df_base is not None:
-    st.write("### 🛠️ Filtros de Seleção")
+    st.write("### 🛠️ Filtros")
     c1, c2, c3 = st.columns(3)
     with c1:
         f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
@@ -238,9 +200,9 @@ if df_base is not None:
     with c3:
         f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
 
-    f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o produto...")
+    f_code = st.text_input("🔍 Buscar Produto", placeholder="Código...")
 
-    # Filtros finais
+    # Filtros Finais
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code:
         dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
@@ -254,7 +216,6 @@ if df_base is not None:
     dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
     dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
-    # ABAS
     tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações"])
 
     def preparar_view(df):
@@ -265,62 +226,44 @@ if df_base is not None:
         return df_v[cols]
 
     with tab1:
-        st.subheader("Auditoria - Unidades Joinville")
+        st.subheader("Joinville")
         v_jlle = preparar_view(dff_jlle)
         if not v_jlle.empty:
             st.dataframe(estilizar_tabela(v_jlle), use_container_width=True, hide_index=True)
-        
-        st.download_button(
-            label="📥 Exportar Joinville para Excel",
-            data=para_excel(v_jlle),
-            file_name="auditoria_joinville.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.download_button("📥 Baixar Excel", para_excel(v_jlle), "joinville.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     with tab2:
-        st.subheader("Auditoria - Outras Filiais")
-        v_outras = preparar_view(dff_outras)
-        if not v_outras.empty:
-            st.dataframe(estilizar_tabela(v_outras), use_container_width=True, hide_index=True)
-        
-        st.download_button(
-            label="📥 Exportar Filiais para Excel",
-            data=para_excel(v_outras),
-            file_name="auditoria_filiais.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.subheader("Outras Filiais")
+        v_out = preparar_view(dff_outras)
+        if not v_out.empty:
+            st.dataframe(estilizar_tabela(v_out), use_container_width=True, hide_index=True)
+        st.download_button("📥 Baixar Excel", para_excel(v_out), "filiais.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     with tab3:
         if not dff_jlle.empty:
-            st.markdown('<div class="section-title">💰 Financeiro (Joinville)</div>', unsafe_allow_html=True)
+            st.markdown("### Resumo Financeiro")
             v_total = dff_jlle["Vl Total ERP"].sum()
             v_err = dff_jlle["Vl Divergência"].abs().sum()
             ac_v = (1 - (v_err/v_total))*100 if v_total > 0 else 0
             
             k1, k2, k3 = st.columns(3)
-            k1.metric("VALOR EM ESTOQUE", f"R$ {formatar_br(v_total)}")
-            k2.metric("IMPACTO DIVERGENTE", f"R$ {formatar_br(v_err)}")
-            k3.metric("ACURACIDADE VALOR", f"{ac_v:.2f}%")
+            k1.metric("ESTOQUE TOTAL", f"R$ {formatar_br(v_total)}")
+            k2.metric("VALOR DIVERGENTE", f"R$ {formatar_br(v_err)}")
+            k3.metric("ACURACIDADE", f"{ac_v:.2f}%")
 
-            st.markdown('<div class="section-title">📦 Itens (Joinville)</div>', unsafe_allow_html=True)
+            st.markdown("### Resumo de Itens")
             df_unq = dff_jlle.drop_duplicates(subset=["Empresa", "Filial", "Armazem", "Produto"])
             total_it = len(df_unq)
             it_div = len(df_unq[df_unq["Status"] == "Divergente"])
             ac_it = (1 - (it_div/total_it))*100 if total_it > 0 else 0
 
             k4, k5, k6 = st.columns(3)
-            k4.metric("TOTAL DE ITENS", f"{total_it:,}".replace(",", "."))
+            k4.metric("TOTAL ITENS", f"{total_it:,}".replace(",", "."))
             k5.metric("ITENS DIVERGENTES", f"{it_div:,}".replace(",", "."))
-            k6.metric("ACURACIDADE ITENS", f"{ac_it:.2f}%")
+            k6.metric("ACURACIDADE", f"{ac_it:.2f}%")
 
     with tab4:
-        if f_code and len(f_code) >= 3:
-            try:
-                engine = get_engine()
-                df_nf = buscar_movimentacoes_nuvem(engine, f_code)
-                if not df_nf.empty:
-                    st.dataframe(estilizar_tabela(df_nf), use_container_width=True, hide_index=True)
-            except: pass
+        st.info("Digite o código do produto acima para ver as movimentações.")
 
 else:
-    st.info("💡 Carregue os arquivos na barra lateral para iniciar.")
+    st.info("💡 Aguardando dados...")
