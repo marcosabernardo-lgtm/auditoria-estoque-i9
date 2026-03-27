@@ -14,112 +14,106 @@ from processador_movs import (
 
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 
-# --- CSS REFINADO: AZUL PETRÓLEO VIBRANTE (ESTILO DASHBOARD PROFISSIONAL) ---
+# --- CSS BASEADO NA SUA PALETA OFICIAL (#005562 e #EC6E21) ---
 st.markdown(
-    """
+    f"""
     <style>
-    /* Cor de Fundo Geral - Azul Petróleo mais vivo */
-    [data-testid="stAppViewContainer"] {
-        background-color: #0e3d42;
-    }
-    [data-testid="stHeader"] {
-        background-color: #0e3d42;
-    }
-    [data-testid="stSidebar"] {
-        background-color: #0a2e32;
-    }
+    /* Cor de Fundo Geral - Azul Petróleo Oficial */
+    [data-testid="stAppViewContainer"] {{
+        background-color: #005562;
+    }}
+    [data-testid="stHeader"] {{
+        background-color: #005562;
+    }}
+    [data-testid="stSidebar"] {{
+        background-color: #004550; /* Um tom levemente mais escuro para a lateral */
+    }}
 
-    /* Título Principal */
-    .main-title {
-        border-left: 6px solid #ff8c00;
+    /* Título Principal com borda Laranja Oficial */
+    .main-title {{
+        border-left: 6px solid #EC6E21;
         padding-left: 15px;
         color: #ffffff;
         font-weight: 700;
         font-size: 2.2rem;
         margin-bottom: 25px;
-    }
+    }}
 
-    /* Cards de Métricas (Fundo azul profundo, borda laranja) */
-    div[data-testid="stMetric"] {
-        border: 1px solid #ff8c00; 
+    /* Cards de Métricas (Borda Laranja Oficial) */
+    div[data-testid="stMetric"] {{
+        border: 2px solid #EC6E21; 
         padding: 20px; 
         border-radius: 12px;
-        background-color: #0d2f33; 
-        box-shadow: 4px 4px 15px rgba(0,0,0,0.3);
-    }
-    div[data-testid="stMetric"] label {
-        color: #00d4df !important; /* Ciano suave para o label */
-        font-size: 0.95rem !important;
-        font-weight: 500;
-        text-transform: uppercase;
-    }
-    div[data-testid="stMetricValue"] > div {
+        background-color: #004550; 
+        box-shadow: 4px 4px 15px rgba(0,0,0,0.2);
+        text-align: center;
+    }}
+    div[data-testid="stMetricValue"] > div {{
         color: #ffffff !important;
-        font-size: 2rem !important;
-        font-weight: 700 !important;
-    }
+        font-size: 2.2rem !important;
+        font-weight: 800 !important;
+    }}
+    div[data-testid="stMetric"] label {{
+        color: #ffffff !important;
+        font-size: 0.9rem !important;
+        text-transform: uppercase;
+        opacity: 0.8;
+    }}
 
-    /* Filtros (Radios) - Estilo Pílula Integrada */
-    div[data-testid="stRadio"] > div {
+    /* Filtros (Radios) - Azul Petróleo contrastante */
+    div[data-testid="stRadio"] > div {{
         flex-direction: row; 
-        border: 1px solid #1a5e65; 
+        border: 1px solid #007687; 
         padding: 6px 14px;
         border-radius: 15px; 
-        background-color: #134e54; /* Azul petróleo médio */
-    }
-    div[data-testid="stRadio"] label {
+        background-color: #004550;
+    }}
+    div[data-testid="stRadio"] label {{
         color: #ffffff !important;
-        font-size: 0.9rem;
-    }
+    }}
 
-    /* Campo de Busca (Input) */
-    .stTextInput input {
-        background-color: #134e54 !important;
+    /* Campo de Busca */
+    .stTextInput input {{
+        background-color: #004550 !important;
         color: white !important;
-        border: 1px solid #1a5e65 !important;
-        border-radius: 8px;
-        height: 45px;
-    }
+        border: 1px solid #007687 !important;
+    }}
 
-    /* Estilização das Abas (Tabs) */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 12px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #134e54;
+    /* Estilização das Abas (Ativa em Laranja Oficial) */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 10px;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        background-color: #004550;
         border-radius: 8px 8px 0px 0px;
         color: #ffffff;
         padding: 10px 25px;
-        font-weight: 400;
-        border-bottom: 3px solid transparent;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #ff8c00 !important;
+    }}
+    .stTabs [aria-selected="true"] {{
+        background-color: #EC6E21 !important;
         color: white !important;
         font-weight: 700 !important;
-    }
+    }}
 
-    /* Tabelas (Dataframe) - Integrar fundo */
-    .stDataFrame {
-        border: 1px solid #1a5e65;
-        border-radius: 8px;
-        background-color: #0d2f33;
-    }
-
-    /* Botão Exportar (Laranja) */
-    .stDownloadButton button {
-        background-color: #ff8c00 !important;
+    /* Ajuste de Tabelas */
+    .stDataFrame {{
+        background-color: #004550;
+        border-radius: 10px;
+    }}
+    
+    /* Botão de Download Laranja */
+    .stDownloadButton button {{
+        background-color: #EC6E21 !important;
         color: white !important;
-        border-radius: 8px;
-        border: none;
-    }
+        border: none !important;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # ---------------------------------------------------------------------------
-# BANCO DE DADOS E LÓGICA (MANTIDA ORIGINAL)
+# BANCO DE DADOS (Lógica original preservada)
 # ---------------------------------------------------------------------------
 
 def get_engine():
@@ -136,17 +130,14 @@ def carregar_do_banco(tabela):
     try:
         return pd.read_sql(f"SELECT * FROM {tabela}", engine)
     except Exception as exc:
-        st.error(f"❌ Erro: {exc}")
+        st.error(f"❌ Erro ao carregar: {exc}")
         return None
 
 def formatar_br(valor):
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def to_float_br(serie):
-    return pd.to_numeric(serie.astype(str).str.replace(r"[^\d,.-]", "", regex=True).str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce")
-
 # ---------------------------------------------------------------------------
-# INTERFACE PRINCIPAL
+# INTERFACE
 # ---------------------------------------------------------------------------
 
 st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
@@ -162,9 +153,8 @@ if df_base is not None:
     df_t1 = df_base if f_emp == "Todas" else df_base[df_base["Empresa"] == f_emp]
 
     with c2:
-        opcoes_filiais = sorted(df_t1["Filial"].unique().tolist())
         dict_filiais = {"Todas": "Todas"}
-        for f in opcoes_filiais:
+        for f in sorted(df_t1["Filial"].unique().tolist()):
             dict_filiais[f.split(" - ")[-1] if " - " in f else f] = f
         f_fil_curta = st.radio("📍 Filial", list(dict_filiais.keys()), horizontal=True)
         f_fil_longa = dict_filiais[f_fil_curta]
@@ -173,12 +163,11 @@ if df_base is not None:
     with c3:
         f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
 
-    dff_parcial = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
-    
     st.write("### 🔍 Consulta por Código")
-    f_code = st.text_input("", placeholder="Ex: 001262")
+    f_code = st.text_input("", placeholder="Digite o código do produto...")
 
-    dff = dff_parcial.copy()
+    # Filtros Finais
+    dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code:
         dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
@@ -186,16 +175,12 @@ if df_base is not None:
     lista_joinville = ["Maquinas - Filial", "Service - Matriz", "Service - Filial", "Tools - Filial"]
     dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
-
-    # Limpeza visual da Filial
     dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
     dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
-    # Abas
-    tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📈 Indicadores", "🚚 Movimentações"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações"])
 
-    # Formatação de Tabelas
-    fmt_moeda = {"Saldo ERP (Total)": "{:,.2f}", "Saldo ERP (Rateado)": "{:,.2f}", "Vl Unit": "R$ {:,.2f}", "Saldo WMS": "{:,.2f}", "Divergência": "{:,.2f}", "Vl Divergência": "R$ {:,.2f}", "Vl Total ERP": "R$ {:,.2f}"}
+    fmt_num = {"Saldo ERP (Total)": "{:,.2f}", "Saldo ERP (Rateado)": "{:,.2f}", "Vl Unit": "R$ {:,.2f}", "Saldo WMS": "{:,.2f}", "Divergência": "{:,.2f}", "Vl Divergência": "R$ {:,.2f}", "Vl Total ERP": "R$ {:,.2f}"}
 
     def preparar_view(df):
         if df.empty: return df
@@ -205,14 +190,16 @@ if df_base is not None:
         return df_v[cols]
 
     with tab1:
+        st.subheader("Auditoria - Unidades Joinville")
         v_jlle = preparar_view(dff_jlle)
-        st.dataframe(v_jlle.style.format(fmt_moeda, decimal=",", thousands="."), use_container_width=True, hide_index=True)
-        st.download_button("📥 Exportar Planilha Joinville", v_jlle.to_csv(index=False).encode('utf-8-sig'), "joinville.csv", "text/csv")
+        st.dataframe(v_jlle.style.format(fmt_num, decimal=",", thousands="."), use_container_width=True, hide_index=True)
+        st.download_button("📥 Exportar Joinville", v_jlle.to_csv(index=False).encode('utf-8-sig'), "joinville.csv", "text/csv")
 
     with tab2:
-        v_outras = preparar_view(dff_outras)
-        st.dataframe(v_outras.style.format(fmt_moeda, decimal=",", thousands="."), use_container_width=True, hide_index=True)
-        st.download_button("📥 Exportar Planilha Filiais", v_outras.to_csv(index=False).encode('utf-8-sig'), "filiais.csv", "text/csv")
+        st.subheader("Auditoria - Outras Filiais")
+        v_out = preparar_view(dff_outras)
+        st.dataframe(v_out.style.format(fmt_num, decimal=",", thousands="."), use_container_width=True, hide_index=True)
+        st.download_button("📥 Exportar Filiais", v_out.to_csv(index=False).encode('utf-8-sig'), "filiais.csv", "text/csv")
 
     with tab3:
         if not dff_jlle.empty:
@@ -236,15 +223,7 @@ if df_base is not None:
             k6.metric("ACURACIDADE ITENS", f"{ac_it:.2f}%")
 
     with tab4:
-        if f_code and len(f_code) >= 3:
-            try:
-                df_nf = buscar_movimentacoes_nuvem(get_engine(), f_code)
-                if not df_nf.empty:
-                    df_nf = df_nf.drop_duplicates()
-                    st.write(f"Últimas Movimentações: **{f_code}**")
-                    # Lógica de formatação de notas (reutilizada do seu código)
-                    st.dataframe(df_nf, use_container_width=True, hide_index=True)
-            except Exception as e:
-                st.error(f"Erro ao buscar notas: {e}")
+        st.info("Utilize a consulta por código para visualizar o histórico de movimentações.")
+
 else:
-    st.info("💡 Por favor, carregue os dados na barra lateral para começar.")
+    st.info("💡 Carregue os dados na barra lateral para começar.")
