@@ -127,4 +127,77 @@ if df_base is not None:
     dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
     dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
-    dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").
+    dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações"])
+
+    def preparar_view(df):
+        if df.empty: return df
+        df_v = df.rename(columns={"C Unitario": "Vl Unit"})
+        cols = [c for c in df_v.columns if c != "Vl Unit"]
+        if "Descrição" in cols: cols.insert(cols.index("Descrição") + 1, "Vl Unit")
+        return df_v[cols]
+
+    with tab1:
+        v_jlle = preparar_view(dff_jlle)
+        if not v_jlle.empty: st.dataframe(estilizar_tabela(v_jlle), use_container_width=True, hide_index=True)
+        st.download_button("📥 Excel Joinville", para_excel(v_jlle), "joinville.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    with tab2:
+        v_out = preparar_view(dff_outras)
+        if not v_out.empty: st.dataframe(estilizar_tabela(v_out), use_container_width=True, hide_index=True)
+        st.download_button("📥 Excel Filiais", para_excel(v_out), "filiais.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    with tab3:
+        if not dff_jlle.empty:
+            v_total = dff_jlle["Vl Total ERP"].sum()
+            v_err = dff_jlle["Vl Divergência"].abs().sum()
+            ac_v = (1 - (v_err/v_total))*100 if v_total > 0 else 0
+            df_unq = dff_jlle.drop_duplicates(subset=["Empresa", "Filial", "Armazem", "Produto"])
+            k1, k2, k3 = st.columns(3)
+            k1.metric("ESTOQUE TOTAL", f"R$ {formatar_br(v_total)}")
+            k2.metric("VALOR DIVERGENTE", f"R$ {formatar_br(v_err)}")
+            k3.metric("ACURACIDADE VALOR", f"{ac_v:.2f}%")
+            k4, k5, k6 = st.columns(3)
+            k4.metric("TOTAL ITENS", f"{len(df_unq):,}".replace(",", "."))
+            k5.metric("ITENS DIVERGENTES", f"{len(df_unq[df_unq['Status'] == 'Divergente']):,}".replace(",", "."))
+            k6.metric("ACURACIDADE ITENS", f"{(1 - (len(df_unq[df_unq['Status'] == 'Divergente'])/len(df_unq)))*100:.2f}%")
+
+    with tab4:
+        if f_code and len(f_code) >= 3:
+            engine = get_engine()
+            df_nf = buscar_movimentacoes_nuvem(engine, f_code)
+            if not df_nf.empty:
+                df_nf = df_nf.drop_duplicates()
+                df_nf["DIGITACAO"] = pd.to_datetime(df_nf["DIGITACAO"]).dt.strftime("%d/%m/%Y")
+                
+                if "Empresa_Filial_Nome" in df_nf.columns:
+                    split = df_nf["Empresa_Filial_Nome"].str.split(" - ", n=1, expand=True)
+                    df_nf.insert(0, "Filial", split[1].fillna(""))
+                    df_nf.insert(0, "Empresa", split[0].fillna(""))
+                    df_nf = df_nf.drop(columns=["Empresa_Filial_Nome"])
+                
+                df_nf = df_nf.rename(columns={
+                    "TIPOMOVIMENTO": "Tipo Movimento", "DOCUMENTO": "Documento", "DIGITACAO": "Digitação",
+                    "NOTA_DEVOLUCAO": "Nota Devolução", "PRODUTO": "Produto", "DESCRICAO": "Descrição",
+                    "CENTRO_CUSTO": "Centro Custo", "RAZAO_SOCIAL": "Razão Social",
+                    "QUANTIDADE": "Qtd", "PRECO_UNITARIO": "Vl Unit", "TOTAL": "Vl Total"
+                })
+
+                # CORREÇÃO: Limpeza e ZFILL da Nota de Devolução
+                if "Nota Devolução" in df_nf.columns:
+                    df_nf["Nota Devolução"] = df_nf["Nota Devolução"].astype(str).str.replace(".0", "", regex=False).replace("None", "").replace("nan", "")
+                    # Preenche com zeros à esquerda até completar 9 dígitos se houver número
+                    df_nf["Nota Devolução"] = df_nf["Nota Devolução"].apply(lambda x: x.zfill(9) if x != "" else "")
+                
+                if "Centro Custo" in df_nf.columns:
+                    df_nf["Centro Custo"] = df_nf["Centro Custo"].astype(str).str.replace(".0", "", regex=False).replace("nan", "")
+                
+                for col in ["Vl Unit", "Vl Total"]:
+                    if col in df_nf.columns: df_nf[col] = to_float_br(df_nf[col])
+
+                st.dataframe(estilizar_tabela(df_nf), use_container_width=True, hide_index=True)
+            else:
+                st.warning("Nenhuma movimentação encontrada.")
+else:
+    st.info("💡 Aguardando dados...")
