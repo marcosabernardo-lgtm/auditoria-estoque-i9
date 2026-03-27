@@ -269,8 +269,10 @@ if df_base is not None:
                 engine = get_engine()
                 df_nf_res = buscar_movimentacoes_nuvem(engine, f_code)
                 if not df_nf_res.empty:
-                    st.write(f"Últimas Movimentações do Produto: **{f_code}**")
+                    # --- REMOÇÃO DE DUPLICADAS DO BANCO ---
+                    df_nf_res = df_nf_res.drop_duplicates()
                     
+                    st.write(f"Últimas Movimentações do Produto: **{f_code}**")
                     df_nf_res["DIGITACAO"] = pd.to_datetime(df_nf_res["DIGITACAO"]).dt.strftime("%d/%m/%Y")
 
                     if "Empresa_Filial_Nome" in df_nf_res.columns:
@@ -293,7 +295,6 @@ if df_base is not None:
                         "TOTAL"          : "Vl Total",
                     })
 
-                    # --- CORREÇÃO DA NOTA DEVOLUÇÃO (ZEROS À ESQUERDA) ---
                     if "Nota Devolução" in df_nf_res.columns:
                         df_nf_res["Nota Devolução"] = (
                             df_nf_res["Nota Devolução"]
@@ -301,7 +302,6 @@ if df_base is not None:
                             .str.replace(".0", "", regex=False)
                             .replace("nan", "")
                         )
-                        # Aplica zfill de 9 dígitos apenas onde não estiver vazio
                         df_nf_res["Nota Devolução"] = df_nf_res["Nota Devolução"].apply(
                             lambda x: x.zfill(9) if x != "" else ""
                         )
