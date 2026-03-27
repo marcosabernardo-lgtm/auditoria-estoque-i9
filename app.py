@@ -15,19 +15,22 @@ from processador_movs import (
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
 
-# 2. CSS Customizado - PALETA OFICIAL (#005562 e #EC6E21)
+# 2. CSS CUSTOMIZADO - PALETA OFICIAL (#005562 e #EC6E21)
 st.markdown(
     """
     <style>
-    /* Fundo Total da Página */
+    /* FUNDO TOTAL DA PÁGINA */
     .stApp {
         background-color: #005562 !important;
     }
     [data-testid="stHeader"] {
         background-color: #005562 !important;
     }
+    [data-testid="stSidebar"] {
+        background-color: #004550 !important;
+    }
 
-    /* Título com barra lateral Laranja */
+    /* TÍTULO COM BARRA LATERAL LARANJA */
     .main-title {
         border-left: 6px solid #EC6E21;
         padding-left: 15px;
@@ -37,15 +40,19 @@ st.markdown(
         margin-bottom: 25px;
     }
 
-    /* Cards de Métricas */
+    /* CARDS DE MÉTRICAS */
     div[data-testid="stMetric"] {
         border: 2px solid #EC6E21 !important;
         background-color: #004550 !important;
         border-radius: 10px;
         padding: 15px;
     }
+    div[data-testid="stMetricValue"] > div {
+        color: #ffffff !important;
+        font-weight: 800 !important;
+    }
 
-    /* Navbar / Abas (Garantindo que apareçam) */
+    /* NAVBAR / ABAS (ESTILO DASHBOARD) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
         background-color: transparent !important;
@@ -54,7 +61,7 @@ st.markdown(
         background-color: #004550 !important;
         color: white !important;
         border-radius: 5px 5px 0px 0px;
-        padding: 10px 20px;
+        padding: 10px 25px;
         border: none !important;
     }
     .stTabs [aria-selected="true"] {
@@ -62,24 +69,39 @@ st.markdown(
         font-weight: bold !important;
     }
 
-    /* Filtros (Radios) */
+    /* --- AJUSTE DA TABELA (PARA SAIR DO PRETO E FICAR AZUL) --- */
+    div[data-testid="stDataFrame"], 
+    div[data-testid="stDataFrame"] [role="grid"],
+    div[data-testid="stDataFrame"] [data-testid="stTable"] {
+        background-color: #004550 !important;
+    }
+
+    /* Cabeçalho da Tabela com borda Laranja */
+    div[data-testid="stDataFrame"] [role="columnheader"] {
+        background-color: #005562 !important;
+        color: white !important;
+        border-bottom: 2px solid #EC6E21 !important;
+    }
+
+    /* Celulas da Tabela */
+    div[data-testid="stDataFrame"] [role="gridcell"] {
+        background-color: #004550 !important;
+        color: white !important;
+        border: 0.1px solid rgba(255,255,255,0.1) !important;
+    }
+
+    /* FILTROS (RADIOS) */
     div[data-testid="stRadio"] > div {
         background-color: #004550 !important;
         border: 1px solid #007687 !important;
-        border-radius: 10px;
-        padding: 5px;
+        border-radius: 12px;
+        padding: 5px 15px;
     }
     div[data-testid="stRadio"] label {
         color: white !important;
     }
 
-    /* Correção da Tabela (Removendo o fundo preto) */
-    .stDataFrame, div[data-testid="stTable"] {
-        background-color: #004550 !important;
-        border-radius: 10px;
-    }
-    
-    /* Input de busca */
+    /* INPUT DE BUSCA */
     .stTextInput input {
         background-color: #004550 !important;
         color: white !important;
@@ -90,7 +112,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- FUNÇÕES DE BANCO (Mantidas) ---
+# --- FUNÇÕES DE BANCO ---
 def get_engine():
     try:
         conn_url = st.secrets["connections"]["postgresql"]["url"]
@@ -116,7 +138,8 @@ st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_h
 df_base = carregar_do_banco("auditoria")
 
 if df_base is not None:
-    # Filtros
+    # FILTROS NO TOPO
+    st.write("### 🛠️ Filtros de Seleção")
     c1, c2, c3 = st.columns(3)
     with c1:
         f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
@@ -133,23 +156,23 @@ if df_base is not None:
     with c3:
         f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
 
-    f_code = st.text_input("🔍 Busca por Código", placeholder="Digite o produto...")
+    f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o produto...")
 
-    # Lógica de Filtro final
+    # APLICAÇÃO DE FILTROS
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code:
         dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
-    # Divisão Joinville
+    # SEPARAÇÃO JOINVILLE
     lista_joinville = ["Maquinas - Filial", "Service - Matriz", "Service - Filial", "Tools - Filial"]
     dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
     
-    # Limpeza visual da Filial
+    # LIMPEZA VISUAL FILIAL
     dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
     dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
-    # --- ABAS (O NAVBAR) ---
+    # ABAS (NAVBAR)
     tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações"])
 
     fmt_num = {"Saldo ERP (Total)": "{:,.2f}", "Saldo ERP (Rateado)": "{:,.2f}", "Vl Unit": "R$ {:,.2f}", "Saldo WMS": "{:,.2f}", "Divergência": "{:,.2f}", "Vl Divergência": "R$ {:,.2f}", "Vl Total ERP": "R$ {:,.2f}"}
@@ -183,7 +206,8 @@ if df_base is not None:
             k3.metric("ACURACIDADE VALOR", f"{ac_v:.2f}%")
 
     with tab4:
-        st.info("Histórico de movimentações por produto.")
-
+        if f_code and len(f_code) >= 3:
+            df_nf = buscar_movimentacoes_nuvem(get_engine(), f_code)
+            st.dataframe(df_nf, use_container_width=True, hide_index=True)
 else:
-    st.info("💡 Carregue os dados para começar.")
+    st.info("💡 Carregue os dados na barra lateral para começar.")
