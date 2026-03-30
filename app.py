@@ -127,11 +127,24 @@ if df_base is not None:
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
-    # Separação
-    lista_joinville = ["Maquinas - Filial", "Service - Matriz", "Service - Filial", "Tools - Filial"]
-    dff_jlle = dff[dff["Filial"].isin(lista_joinville)].copy()
-    dff_outras = dff[~dff["Filial"].isin(lista_joinville)].copy()
-    dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
+    # Separação Joinville x Outras Filiais
+    lista_joinville = [
+        "Maquinas - Filial",
+        "Service - Matriz",
+        "Service - Filial",
+        "Tools - Filial",
+    ]
+    lista_outras = [
+        "Maquinas - Jundiai",
+        "Service - Caxias",
+        "Service - Jundiai",
+        "Robotica - Matriz",
+        "Robotica - Jaragua",
+    ]
+    dff_jlle   = dff[ dff["Filial"].isin(lista_joinville)].copy()
+    dff_outras = dff[ dff["Filial"].isin(lista_outras)].copy()
+    # Mantém só o sufixo para exibição (ex: "Maquinas - Filial" → "Filial")
+    dff_jlle["Filial"]   = dff_jlle["Filial"].str.split(" - ").str[-1]
     dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
     # Reordenar colunas — dados já vêm com rateio correto do processador_auditoria
