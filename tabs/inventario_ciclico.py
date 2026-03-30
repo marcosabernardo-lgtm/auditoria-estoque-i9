@@ -704,6 +704,8 @@ def render(df_jlle, df_outras, formatar_br):
         st.write("**Produtos contados no ciclo:**", sorted(ja_contados_ciclo))
         st.write("**Faltam:**", sorted(faltam))
         st.write("**% cobertura:**", pct_ciclo)
+        st.write("**ciclo_ativo:**", ciclo_ativo)
+        st.write("**uploads_anteriores:**", uploads_anteriores)
     cor_prog           = "#27AE60" if pct_ciclo >= 100 else "#EC6E21"
 
     st.markdown("---")
