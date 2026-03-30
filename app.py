@@ -46,7 +46,7 @@ def to_float_br(serie):
 def estilizar_tabela(df):
     fmt_cols = {}
     for col in df.columns:
-        if any(x in col for x in ["Saldo", "Divergência", "Qtd"]) and "Vl" not in col: fmt_cols[col] = "{:,.2f}"
+        if any(x in col for x in ["Saldo", "Divergência"]) and "Vl" not in col: fmt_cols[col] = "{:,.2f}"
         elif any(x in col for x in ["Vl Unit", "Vl Total", "Preço", "Vl Divergência", "Vl Total ERP"]): fmt_cols[col] = "R$ {:,.2f}"
     styled = df.style.apply(lambda r: ['background-color: #005562; color: #ffffff; font-size: 0.84rem;'] * len(r), axis=1)
     if "Status" in df.columns:
@@ -114,10 +114,17 @@ if df_base is not None:
     dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
     dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
-    # Reordenar colunas
+    # Reordenar colunas e enriquecer com Qtd Locais
     def preparar_view(df):
         if df.empty: return df
-        df_v = df.rename(columns={"C Unitario": "Vl Unit"})
+        df_v = df.rename(columns={
+            "C Unitario": "Vl Unit",
+            "Saldo ERP (Total)": "Saldo ERP",
+        })
+        # Qtd Locais: conta quantas linhas (localizações) cada produto tem
+        qtd_locais = df_v.groupby("Produto")["Produto"].transform("count").astype(int)
+        df_v.insert(df_v.columns.get_loc("Produto") + 1, "Qtd Locais", qtd_locais)
+        # Reposiciona Vl Unit após Descrição
         cols = [c for c in df_v.columns if c != "Vl Unit"]
         if "Descrição" in cols: cols.insert(cols.index("Descrição") + 1, "Vl Unit")
         return df_v[cols]
