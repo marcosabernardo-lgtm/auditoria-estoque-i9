@@ -132,17 +132,17 @@ if df_base is not None:
 
     # Separação Joinville x Outras Filiais
     lista_joinville = [
-        "Maquinas - Filial",
+        "Maquinas - Filial",   "Máquinas - Filial",
         "Service - Matriz",
         "Service - Filial",
         "Tools - Filial",
     ]
     lista_outras = [
-        "Maquinas - Jundiai",
+        "Maquinas - Jundiai",  "Máquinas - Jundiai",
         "Service - Caxias",
         "Service - Jundiai",
-        "Robotica - Matriz",
-        "Robotica - Jaragua",
+        "Robotica - Matriz",   "Robótica - Matriz",
+        "Robotica - Jaragua",  "Robótica - Jaragua",
     ]
     dff_jlle   = dff[ dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[ dff["Filial"].isin(lista_outras)].copy()

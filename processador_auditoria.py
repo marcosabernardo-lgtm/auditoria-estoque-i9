@@ -271,6 +271,15 @@ def cruzar_wms_erp(arquivo_wms, arquivo_erp):
     resto = [c for c in df.columns if c not in colunas_ok]
     df = df[colunas_ok + resto].reset_index(drop=True)
 
+    # Normaliza acentos nas colunas Empresa e Filial para consistência no banco
+    import unicodedata as _ud2
+    def _sem_acento(s):
+        return "".join(c for c in _ud2.normalize("NFD", str(s)) if _ud2.category(c) != "Mn")
+
+    for col in ["Empresa", "Filial"]:
+        if col in df.columns:
+            df[col] = df[col].apply(_sem_acento)
+
     logger.info(
         "cruzar_wms_erp: %d linhas | %d produtos | %d divergentes",
         len(df), df["Produto"].nunique(), int((df["Status"] == "Divergente").sum()),
