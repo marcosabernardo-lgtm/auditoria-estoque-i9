@@ -157,11 +157,27 @@ def db_salvar_ciclo_ativo(engine, empresa, filial, ciclo):
 
 def db_acumular_upload(engine, empresa, filial, upload_info):
     ciclo = db_obter_ciclo_ativo(engine, empresa, filial)
-    if ciclo is None: return
+    if ciclo is None:
+        raise ValueError("Ciclo ativo não encontrado no banco para acumular upload")
     uploads = ciclo.get("uploads", [])
     uploads.append(upload_info)
     ciclo["uploads"] = uploads
-    db_salvar_ciclo_ativo(engine, empresa, filial, ciclo)
+    # Grava diretamente o uploads_json sem passar pelo ciclo completo
+    if engine is None: return
+    try:
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE inventario_ciclo_ativo
+                SET uploads_json = :uploads_json, atualizado_em = NOW()
+                WHERE empresa = :e AND filial = :f
+            """), {
+                "uploads_json": __import__('json').dumps(uploads),
+                "e": empresa,
+                "f": filial,
+            })
+    except Exception as ex:
+        raise RuntimeError(f"db_acumular_upload falhou: {ex}")
 
 def db_fechar_ciclo_ativo(engine, empresa, filial):
     if engine is None: return
