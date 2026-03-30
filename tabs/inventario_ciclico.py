@@ -134,14 +134,16 @@ def calcular_score(df: pd.DataFrame, contados: dict) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Consolida localizações
+    # Consolida localizações — soma WMS e ERP separadamente por produto
     if "Produto" in df.columns and len(df) > df["Produto"].nunique():
-        cols_soma  = [c for c in ["Saldo WMS"] if c in df.columns]
+        # Colunas que devem ser somadas (saldos físicos)
+        cols_soma  = [c for c in ["Saldo WMS", "Saldo ERP (Total)"] if c in df.columns]
+        # Colunas fixas (iguais em todas as localizações do produto)
         cols_fixos = [c for c in ["Produto","Descrição","Empresa","Filial",
-                                   "Saldo ERP (Total)","Vl Unit","Vl Total ERP"] if c in df.columns]
-        df_w = df.groupby("Produto", as_index=False)[cols_soma].sum() if cols_soma else df[["Produto"]].drop_duplicates()
-        df_f = df[cols_fixos].drop_duplicates(subset=["Produto"], keep="first")
-        df   = df_f.merge(df_w, on="Produto", how="left")
+                                   "Vl Unit","Vl Total ERP"] if c in df.columns]
+        df_soma = df.groupby("Produto", as_index=False)[cols_soma].sum()
+        df_fixo = df[cols_fixos].drop_duplicates(subset=["Produto"], keep="first")
+        df      = df_fixo.merge(df_soma, on="Produto", how="left")
         if "Saldo ERP (Total)" in df.columns and "Saldo WMS" in df.columns:
             df["Divergência"] = df["Saldo ERP (Total)"] - df["Saldo WMS"]
 
