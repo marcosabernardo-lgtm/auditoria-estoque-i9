@@ -109,16 +109,14 @@ with st.sidebar:
 # --- CORPO PRINCIPAL ---
 st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
 df_base = carregar_do_banco("auditoria")
-df_movs = buscar_ultimos_movimentos(get_engine()) if df_base is not None else pd.DataFrame()
+@st.cache_data(ttl=300, show_spinner=False)
+def carregar_movimentos():
+    return buscar_ultimos_movimentos(get_engine())
+
+df_movs = carregar_movimentos() if df_base is not None else pd.DataFrame()
 
 if df_base is not None:
-    # DEBUG TEMPORÁRIO — remover após validar
-    with st.expander("🔍 Debug: Filiais no banco"):
-        filiais_banco = sorted(df_base["Filial"].dropna().unique().tolist())
-        st.write("**Todas no banco:**", filiais_banco)
-        st.write("**Na lista Joinville:**", [f for f in filiais_banco if any(j in f for j in ["Maquinas - Filial","Máquinas - Filial","Service - Matriz","Service - Filial","Tools - Filial"])])
-        st.write("**Na lista Outras:**", [f for f in filiais_banco if any(j in f for j in ["Jundiai","Caxias","Jaragua","Robotica","Robótica"])])
-        st.write("**Sem classificação:**", [f for f in filiais_banco if not any(j in f for j in ["Maquinas - Filial","Máquinas - Filial","Service - Matriz","Service - Filial","Tools - Filial","Jundiai","Caxias","Jaragua","Robotica","Robótica"])])
+
     # Filtros
     c1, c2, c3 = st.columns(3)
     with c1: f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)

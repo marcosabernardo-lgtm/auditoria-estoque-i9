@@ -283,10 +283,12 @@ def cruzar_wms_erp(arquivo_wms, arquivo_erp):
     resto = [c for c in df.columns if c not in colunas_ok]
     df = df[colunas_ok + resto].reset_index(drop=True)
 
-    # Normaliza acentos nas colunas Empresa e Filial para consistência no banco
+    # Normaliza acentos e padroniza separador nas colunas Empresa e Filial
     import unicodedata as _ud2
     def _sem_acento(s):
-        return "".join(c for c in _ud2.normalize("NFD", str(s)) if _ud2.category(c) != "Mn")
+        sem = "".join(c for c in _ud2.normalize("NFD", str(s)) if _ud2.category(c) != "Mn")
+        # Substitui travessão e em-dash por hífen simples
+        return sem.replace("–", "-").replace("—", "-").strip()
 
     for col in ["Empresa", "Filial"]:
         if col in df.columns:
