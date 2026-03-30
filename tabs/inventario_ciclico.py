@@ -360,8 +360,8 @@ def render(df_jlle, df_outras, formatar_br):
 
     if modo == "Quantidade fixa":
         cols = st.columns(4)
-        if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 5
-        for col, qtd in zip(cols, [5,30,50,80]):
+        if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 2
+        for col, qtd in zip(cols, [2,30,50,80]):
             with col:
                 if st.button(f"{qtd}", key=f"ic_q{qtd}",
                              type="primary" if st.session_state.ic_qtd==qtd else "secondary"):
