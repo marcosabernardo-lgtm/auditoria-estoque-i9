@@ -111,7 +111,7 @@ def _ler_wms(arquivo):
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     # Remove colunas auxiliares do WMS desnecessárias
-    df = df.drop(columns=["Capacidade", "Disponivel", "Utilizado"], errors="ignore")
+    df = df.drop(columns=["Capacidade", "Disponivel", "Disponível", "Utilizado"], errors="ignore")
 
     df = df[df["Saldo WMS"] > 0].copy()
     if df.empty:

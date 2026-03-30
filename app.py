@@ -112,8 +112,12 @@ df_base = carregar_do_banco("auditoria")
 
 if df_base is not None:
     # DEBUG TEMPORÁRIO — remover após validar
-    with st.expander("🔍 Debug: valores únicos de Filial no banco"):
-        st.write(sorted(df_base["Filial"].dropna().unique().tolist()))
+    with st.expander("🔍 Debug: Filiais no banco"):
+        filiais_banco = sorted(df_base["Filial"].dropna().unique().tolist())
+        st.write("**Todas no banco:**", filiais_banco)
+        st.write("**Na lista Joinville:**", [f for f in filiais_banco if any(j in f for j in ["Maquinas - Filial","Máquinas - Filial","Service - Matriz","Service - Filial","Tools - Filial"])])
+        st.write("**Na lista Outras:**", [f for f in filiais_banco if any(j in f for j in ["Jundiai","Caxias","Jaragua","Robotica","Robótica"])])
+        st.write("**Sem classificação:**", [f for f in filiais_banco if not any(j in f for j in ["Maquinas - Filial","Máquinas - Filial","Service - Matriz","Service - Filial","Tools - Filial","Jundiai","Caxias","Jaragua","Robotica","Robótica"])])
     # Filtros
     c1, c2, c3 = st.columns(3)
     with c1: f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
