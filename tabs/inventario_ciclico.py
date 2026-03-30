@@ -134,18 +134,27 @@ def calcular_score(df: pd.DataFrame, contados: dict) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Consolida localizações — soma WMS e ERP separadamente por produto
+    # Consolida localizações por Produto+Armazem
+    # - Saldo WMS: soma todas as localizações do mesmo armazém
+    # - Saldo ERP (Total): já é o saldo do armazém (não soma entre armazéns diferentes)
+    # - Depois soma os armazéns para obter o total por produto
+    chave_arm = [c for c in ["Produto", "Armazem"] if c in df.columns]
     if "Produto" in df.columns and len(df) > df["Produto"].nunique():
-        # Colunas que devem ser somadas (saldos físicos)
-        cols_soma  = [c for c in ["Saldo WMS", "Saldo ERP (Total)"] if c in df.columns]
-        # Colunas fixas (iguais em todas as localizações do produto)
-        cols_fixos = [c for c in ["Produto","Descrição","Empresa","Filial",
-                                   "Vl Unit","Vl Total ERP"] if c in df.columns]
-        df_soma = df.groupby("Produto", as_index=False)[cols_soma].sum()
-        df_fixo = df[cols_fixos].drop_duplicates(subset=["Produto"], keep="first")
-        df      = df_fixo.merge(df_soma, on="Produto", how="left")
-        if "Saldo ERP (Total)" in df.columns and "Saldo WMS" in df.columns:
-            df["Divergência"] = df["Saldo ERP (Total)"] - df["Saldo WMS"]
+        cols_soma_wms = [c for c in ["Saldo WMS"] if c in df.columns]
+        cols_fixos_arm = [c for c in ["Produto","Armazem","Descrição","Empresa","Filial",
+                                       "Saldo ERP (Total)","Vl Unit","Vl Total ERP"] if c in df.columns]
+        # Passo 1: consolida por Produto+Armazem (soma WMS, ERP já é único por armazem)
+        df_wms_arm = df.groupby(chave_arm, as_index=False)[cols_soma_wms].sum() if cols_soma_wms else df[chave_arm].drop_duplicates()
+        df_erp_arm = df[cols_fixos_arm].drop_duplicates(subset=chave_arm, keep="first")
+        df_arm     = df_erp_arm.merge(df_wms_arm, on=chave_arm, how="left")
+        df_arm["Divergência"] = df_arm["Saldo ERP (Total)"] - df_arm["Saldo WMS"]
+
+        # Passo 2: consolida por Produto (soma todos os armazéns)
+        cols_soma_prod = [c for c in ["Saldo WMS","Saldo ERP (Total)","Divergência","Vl Total ERP"] if c in df_arm.columns]
+        cols_fixos_prod = [c for c in ["Produto","Descrição","Empresa","Filial","Vl Unit"] if c in df_arm.columns]
+        df_soma  = df_arm.groupby("Produto", as_index=False)[cols_soma_prod].sum()
+        df_fixo  = df_arm[cols_fixos_prod].drop_duplicates(subset=["Produto"], keep="first")
+        df       = df_fixo.merge(df_soma, on="Produto", how="left")
 
     # Curva ABC
     df = df.sort_values("Vl Total ERP", ascending=False).reset_index(drop=True)
