@@ -692,8 +692,11 @@ def render(df_jlle, df_outras, formatar_br):
     ja_contados_ciclo  = produtos_contados_no_ciclo(engine_db, empresa_sel, filial_sel)
     lista_atual        = ciclo_ativo or {}
     produtos_lista     = set(lista_atual.get("produtos_lista", []))
-    faltam             = produtos_lista - ja_contados_ciclo
-    pct_ciclo          = len(ja_contados_ciclo & produtos_lista) / len(produtos_lista) * 100 if produtos_lista else 0
+    # Normaliza zeros à esquerda para garantir comparação correta
+    produtos_lista    = {str(p).strip().zfill(6) for p in produtos_lista}
+    ja_contados_ciclo = {str(p).strip().zfill(6) for p in ja_contados_ciclo}
+    faltam            = produtos_lista - ja_contados_ciclo
+    pct_ciclo         = len(ja_contados_ciclo & produtos_lista) / len(produtos_lista) * 100 if produtos_lista else 0
     cor_prog           = "#27AE60" if pct_ciclo >= 100 else "#EC6E21"
 
     st.markdown("---")
