@@ -322,6 +322,19 @@ def render(df_jlle, df_outras, formatar_br):
     # ── Gerar lista do ciclo ─────────────────────────────────────────────
     st.markdown("### Gerar lista do ciclo")
     modo = st.radio("Modo", ["Quantidade fixa","Percentual"], horizontal=True, key="ic_modo")
+
+    if modo == "Quantidade fixa":
+        st.caption(
+            "📌 Conta um número fixo de produtos por ciclo. "
+            "Ideal quando sua equipe tem capacidade definida por contagem (ex: 50 itens por semana)."
+        )
+    else:
+        st.caption(
+            "📊 Conta uma fração do estoque por ciclo — o sistema calcula quantos itens isso representa. "
+            "Ajuste a faixa conforme a capacidade da equipe: "
+            "**5%** = 20 ciclos/ano · **10%** = 10 ciclos/ano · **20%** = 5 ciclos/ano · **30%** = ~4 ciclos/ano."
+        )
+
     if modo == "Quantidade fixa":
         cols = st.columns(4)
         if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 50
