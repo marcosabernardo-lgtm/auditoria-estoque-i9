@@ -14,11 +14,32 @@ def _slug(empresa, filial):
 def _chave_contados(e, f):   return f"ic_contados_{_slug(e,f)}"
 def _chave_ciclos(e, f):     return f"ic_ciclos_{_slug(e,f)}"
 def _chave_ciclo_ativo(e, f):return f"ic_ciclo_ativo_{_slug(e,f)}"
+def _chave_uploads(e, f):    return f"ic_uploads_{_slug(e,f)}"
 
 def inicializar(e, f):
-    for k, v in [(_chave_contados(e,f), {}), (_chave_ciclos(e,f), []), (_chave_ciclo_ativo(e,f), None)]:
+    for k, v in [
+        (_chave_contados(e,f),    {}),
+        (_chave_ciclos(e,f),      []),
+        (_chave_ciclo_ativo(e,f), None),
+        (_chave_uploads(e,f),     []),   # lista de uploads do ciclo atual
+    ]:
         if k not in st.session_state:
             st.session_state[k] = v
+
+def obter_uploads(e, f):     return st.session_state.get(_chave_uploads(e,f), [])
+
+def acumular_upload(e, f, upload_info: dict):
+    """Acumula um novo upload no ciclo atual (união de produtos)."""
+    uploads = st.session_state[_chave_uploads(e,f)]
+    uploads.append(upload_info)
+    st.session_state[_chave_uploads(e,f)] = uploads
+
+def produtos_contados_no_ciclo(e, f) -> set:
+    """Retorna união de todos os produtos contados nos uploads do ciclo."""
+    todos = set()
+    for u in obter_uploads(e, f):
+        todos.update(u.get("produtos", []))
+    return todos
 
 def obter_contados(e, f):    return st.session_state.get(_chave_contados(e,f), {})
 def obter_ciclos(e, f):      return st.session_state.get(_chave_ciclos(e,f), [])
@@ -27,25 +48,48 @@ def obter_ciclo_ativo(e, f): return st.session_state.get(_chave_ciclo_ativo(e,f)
 def salvar_ciclo_ativo(e, f, ciclo):
     st.session_state[_chave_ciclo_ativo(e,f)] = ciclo
 
-def fechar_ciclo(e, f, resultado):
-    """Fecha o ciclo ativo, registra no histórico e atualiza contados."""
-    ciclo = obter_ciclo_ativo(e, f)
+def fechar_ciclo(e, f):
+    """Fecha o ciclo, marca todos os produtos contados e registra no histórico."""
+    ciclo   = obter_ciclo_ativo(e, f)
+    uploads = obter_uploads(e, f)
     if not ciclo:
         return
-    # Marca produtos como contados
-    data_iso = resultado.get("data_iso", date.today().isoformat())
+
+    # União de todos os produtos contados nos uploads
+    todos_contados = produtos_contados_no_ciclo(e, f)
+    data_iso = uploads[-1].get("data_iso", date.today().isoformat()) if uploads else date.today().isoformat()
+
+    # Atualiza contados globais
     contados = st.session_state[_chave_contados(e,f)]
-    for p in resultado.get("produtos_contados", []):
+    for p in todos_contados:
         contados[p] = data_iso
-    # Registra ciclo no histórico
-    ciclo_fechado = {**ciclo, **resultado, "status": "Concluído"}
+
+    # Monta registro do ciclo
+    produtos_lista = set(ciclo.get("produtos_lista", []))
+    pct = len(todos_contados & produtos_lista) / len(produtos_lista) * 100 if produtos_lista else 0
+
+    ciclo_fechado = {
+        **ciclo,
+        "uploads":          len(uploads),
+        "produtos_contados":list(todos_contados),
+        "cobertura_pct":    pct,
+        "data_fechamento":  date.today().strftime("%d/%m/%Y"),
+        "status":           "Concluído",
+        # Metadados do último upload
+        "num_inv":          uploads[-1].get("num_inv","—") if uploads else "—",
+        "data":             uploads[-1].get("data","—")    if uploads else "—",
+        "responsavel":      uploads[-1].get("responsavel","—") if uploads else "—",
+        "acuracidade":      uploads[-1].get("acuracidade","—") if uploads else "—",
+    }
     st.session_state[_chave_ciclos(e,f)].append(ciclo_fechado)
     st.session_state[_chave_ciclo_ativo(e,f)] = None
+    st.session_state[_chave_uploads(e,f)]     = []
 
 def resetar(e, f):
     st.session_state[_chave_contados(e,f)]    = {}
     st.session_state[_chave_ciclos(e,f)]      = []
     st.session_state[_chave_ciclo_ativo(e,f)] = None
+    st.session_state[_chave_uploads(e,f)]     = []
 
 
 # ── Processador resultado WMS ─────────────────────────────────────────────────
@@ -275,171 +319,186 @@ def render(df_jlle, df_outras, formatar_br):
     # ── Ciclo ativo ───────────────────────────────────────────────────────
     st.markdown("---")
 
-    if not ciclo_ativo:
-        # ── Gerar novo ciclo ──────────────────────────────────────────────
-        st.markdown("### Gerar lista do ciclo")
-        modo = st.radio("Modo", ["Quantidade fixa","Percentual"], horizontal=True, key="ic_modo")
-        if modo == "Quantidade fixa":
-            cols = st.columns(4)
-            if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 50
-            for col, qtd in zip(cols, [30,50,80,100]):
-                with col:
-                    if st.button(f"{qtd}", key=f"ic_q{qtd}",
-                                 type="primary" if st.session_state.ic_qtd==qtd else "secondary"):
-                        st.session_state.ic_qtd = qtd
-            qtd_ciclo = min(st.session_state.ic_qtd, total_skus)
-        else:
-            pmap = {"5%":0.05,"10%":0.10,"20%":0.20,"30%":0.30}
-            pl = st.select_slider("Faixa", list(pmap.keys()), value="10%", key="ic_pct")
-            qtd_ciclo = max(1, int(total_skus * pmap[pl]))
-            st.caption(f"→ {qtd_ciclo} itens de {total_skus}")
-
-        df_lista = montar_lista(df_score, qtd_ciclo, contados)
-        qp = int((df_lista["Origem"]=="🔴 Alta prioridade").sum())
-        qk = int((df_lista["Origem"]=="⬜ Cobertura KPMG").sum())
-
-        st.markdown(
-            f"**{len(df_lista)} itens** — "
-            f"<span style='color:#EC6E21'>🔴 {qp} prioridade</span> · "
-            f"<span style='color:#27AE60'>⬜ {qk} KPMG</span>",
-            unsafe_allow_html=True)
-
-        cols_exib = [c for c in ["Produto","Descrição","Empresa","Filial","Curva ABC","Score",
-                                  "Já Contado","Dias s/ Contagem","Saldo ERP (Total)","Saldo WMS",
-                                  "Divergência","Vl Total ERP","Motivo","Origem"] if c in df_lista.columns]
-        df_exibir = df_lista[cols_exib]
-
-        st.dataframe(
-            df_exibir.style
-            .apply(lambda r: ["background-color:#005562;color:#fff;font-size:0.84rem;"]*len(r), axis=1)
-            .set_table_styles([
-                {"selector":"thead th","props":[("background-color","#004550"),("color","#fff"),("border-bottom","2px solid #EC6E21")]},
-                {"selector":"td","props":[("padding","8px 12px"),("border-bottom","1px solid rgba(255,255,255,0.05)")]}])
-            .format({"Saldo ERP (Total)":"{:,.2f}","Saldo WMS":"{:,.2f}","Divergência":"{:,.2f}",
-                     "Vl Total ERP":"R$ {:,.2f}","Score":"{:.2f}","Dias s/ Contagem":"{:.0f}d"}, na_rep="-"),
-            use_container_width=True, hide_index=False)
-
-        # Botão para abrir ciclo
-        num_ciclo = f"{date.today().strftime('%Y%m%d')}-{empresa_sel}-{filial_sel}".replace(" ","")
-        col_dl, col_open = st.columns([2,1])
-        with col_dl:
-            st.download_button(
-                "📥 Baixar Excel para Contagem",
-                data=gerar_xlsx_lista(df_exibir, label),
-                file_name=f"inv_{num_ciclo}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        with col_open:
-            if st.button("▶ Abrir este ciclo", key="ic_abrir", type="primary"):
-                salvar_ciclo_ativo(empresa_sel, filial_sel, {
-                    "num_ciclo":    num_ciclo,
-                    "data_geracao": date.today().strftime("%d/%m/%Y"),
-                    "label":        label,
-                    "qtd_lista":    len(df_exibir),
-                    "produtos_lista": df_exibir["Produto"].astype(str).tolist(),
-                    "status":       "Aguardando resultado WMS",
-                })
-                st.success(f"Ciclo **{num_ciclo}** aberto! Faça a contagem no WMS e volte para fazer o upload.")
-                st.rerun()
-
+    # ── Gerar lista do ciclo ─────────────────────────────────────────────
+    st.markdown("### Gerar lista do ciclo")
+    modo = st.radio("Modo", ["Quantidade fixa","Percentual"], horizontal=True, key="ic_modo")
+    if modo == "Quantidade fixa":
+        cols = st.columns(4)
+        if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 50
+        for col, qtd in zip(cols, [30,50,80,100]):
+            with col:
+                if st.button(f"{qtd}", key=f"ic_q{qtd}",
+                             type="primary" if st.session_state.ic_qtd==qtd else "secondary"):
+                    st.session_state.ic_qtd = qtd
+        qtd_ciclo = min(st.session_state.ic_qtd, total_skus)
     else:
-        # ── Ciclo em andamento → aguardando upload WMS ────────────────────
-        st.markdown(f"### Ciclo em andamento")
+        pmap = {"5%":0.05,"10%":0.10,"20%":0.20,"30%":0.30}
+        pl = st.select_slider("Faixa", list(pmap.keys()), value="10%", key="ic_pct")
+        qtd_ciclo = max(1, int(total_skus * pmap[pl]))
+        st.caption(f"→ {qtd_ciclo} itens de {total_skus}")
 
-        st.markdown(
-            f"""<div style="background:#004550;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
-              <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div>
-                  <span style="color:#EC6E21;font-weight:bold;font-size:1rem;">📋 {ciclo_ativo['num_ciclo']}</span><br>
-                  <span style="color:#fff;font-size:0.85rem;">Gerado em {ciclo_ativo['data_geracao']} · {ciclo_ativo['qtd_lista']} produtos</span>
-                </div>
-                <span style="background:#EC6E21;color:#fff;padding:4px 10px;border-radius:12px;font-size:0.8rem;">
-                  {ciclo_ativo['status']}
-                </span>
-              </div></div>""",
-            unsafe_allow_html=True)
+    df_lista = montar_lista(df_score, qtd_ciclo, contados)
+    qp = int((df_lista["Origem"]=="🔴 Alta prioridade").sum())
+    qk = int((df_lista["Origem"]=="⬜ Cobertura KPMG").sum())
 
-        st.markdown("#### Upload do resultado WMS")
-        st.caption("Faça o upload do Excel gerado pelo WMS. O sistema vai comparar com a lista do ciclo.")
+    st.markdown(
+        f"**{len(df_lista)} itens** — "
+        f"<span style='color:#EC6E21'>🔴 {qp} prioridade</span> · "
+        f"<span style='color:#27AE60'>⬜ {qk} KPMG</span>",
+        unsafe_allow_html=True)
 
-        arquivo = st.file_uploader("Selecione o arquivo Excel do WMS", type=["xlsx"], key="ic_upload")
+    cols_exib = [c for c in ["Produto","Descrição","Empresa","Filial","Curva ABC","Score",
+                              "Já Contado","Dias s/ Contagem","Saldo ERP (Total)","Saldo WMS",
+                              "Divergência","Vl Total ERP","Motivo","Origem"] if c in df_lista.columns]
+    df_exibir = df_lista[cols_exib]
 
-        if arquivo:
-            try:
-                res = processar_resultado_wms(arquivo)
-                df_wms = res["df"]
+    st.dataframe(
+        df_exibir.style
+        .apply(lambda r: ["background-color:#005562;color:#fff;font-size:0.84rem;"]*len(r), axis=1)
+        .set_table_styles([
+            {"selector":"thead th","props":[("background-color","#004550"),("color","#fff"),("border-bottom","2px solid #EC6E21")]},
+            {"selector":"td","props":[("padding","8px 12px"),("border-bottom","1px solid rgba(255,255,255,0.05)")]}])
+        .format({"Saldo ERP (Total)":"{:,.2f}","Saldo WMS":"{:,.2f}","Divergência":"{:,.2f}",
+                 "Vl Total ERP":"R$ {:,.2f}","Score":"{:.2f}","Dias s/ Contagem":"{:.0f}d"}, na_rep="-"),
+        use_container_width=True, hide_index=False)
 
-                # Metadados
-                c1,c2,c3,c4 = st.columns(4)
-                c1.metric("Nº Inventário", res.get("num_inv","—"))
-                c2.metric("Data",          res.get("data","—"))
-                c3.metric("Responsável",   res.get("responsavel","—"))
-                c4.metric("Acuracidade",   res.get("acuracidade","—"))
+    # Número do ciclo gerado automaticamente
+    num_ciclo = f"{date.today().strftime('%Y%m%d')}-{empresa_sel}-{filial_sel}".replace(" ","")
 
-                # Comparação: lista gerada vs WMS
-                produtos_lista  = set(ciclo_ativo["produtos_lista"])
-                produtos_wms    = set(res["produtos"])
-                contados_no_ciclo   = produtos_lista & produtos_wms
-                nao_contados_ciclo  = produtos_lista - produtos_wms
-                extras_wms          = produtos_wms - produtos_lista
+    col_dl, col_info = st.columns([2,2])
+    with col_dl:
+        st.download_button(
+            "📥 Baixar Excel para Contagem",
+            data=gerar_xlsx_lista(df_exibir, label),
+            file_name=f"inv_{num_ciclo}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with col_info:
+        st.info(f"Nº do ciclo: **{num_ciclo}**")
 
-                st.markdown("#### Resultado da comparação")
-                col_ok, col_miss, col_extra = st.columns(3)
-                col_ok.metric("✅ Contados",          len(contados_no_ciclo))
-                col_miss.metric("⚠️ Não encontrados", len(nao_contados_ciclo))
-                col_extra.metric("➕ Extras no WMS",   len(extras_wms))
+    # Guarda a lista atual no session_state para cruzar com o upload
+    st.session_state[f"ic_lista_atual_{_slug(empresa_sel,filial_sel)}"] = {
+        "num_ciclo":      num_ciclo,
+        "data_geracao":   date.today().strftime("%d/%m/%Y"),
+        "label":          label,
+        "qtd_lista":      len(df_exibir),
+        "produtos_lista": df_exibir["Produto"].astype(str).tolist(),
+    }
 
-                # Tabela detalhada
-                df_wms["Status Ciclo"] = df_wms["Codigo"].apply(
-                    lambda p: "✅ Contado" if p in contados_no_ciclo else
-                              "➕ Extra (não estava na lista)" if p in extras_wms else "—"
-                )
-                # Adiciona produtos não encontrados
-                if nao_contados_ciclo:
-                    df_miss = pd.DataFrame({
-                        "Codigo": list(nao_contados_ciclo),
-                        "Descricao": "—",
-                        "Qtd Antes": 0, "Qtd Depois": 0, "Qtd Diferença": 0,
-                        "Acuracidade": "—",
-                        "Status Ciclo": "⚠️ Não contado"
-                    })
-                    df_comp = pd.concat([df_wms, df_miss], ignore_index=True)
-                else:
-                    df_comp = df_wms.copy()
+    # Upload do resultado WMS direto aqui
+    st.markdown("---")
+    # Progresso acumulado dos uploads anteriores
+    uploads_anteriores = obter_uploads(empresa_sel, filial_sel)
+    ja_contados_ciclo  = produtos_contados_no_ciclo(empresa_sel, filial_sel)
+    lista_atual        = st.session_state.get(f"ic_lista_atual_{_slug(empresa_sel,filial_sel)}", {})
+    produtos_lista     = set(lista_atual.get("produtos_lista", []))
+    faltam             = produtos_lista - ja_contados_ciclo
+    pct_ciclo          = len(ja_contados_ciclo & produtos_lista) / len(produtos_lista) * 100 if produtos_lista else 0
+    cor_prog           = "#27AE60" if pct_ciclo >= 100 else "#EC6E21"
 
-                df_comp = df_comp.sort_values("Status Ciclo")
-                st.dataframe(
-                    df_comp[["Codigo","Descricao","Qtd Antes","Qtd Depois","Qtd Diferença","Acuracidade","Status Ciclo"]],
-                    use_container_width=True, hide_index=True)
+    st.markdown("---")
+    st.markdown("### Upload do resultado WMS")
 
-                # Cobertura do ciclo
-                pct_ciclo = len(contados_no_ciclo) / len(produtos_lista) * 100 if produtos_lista else 0
+    # Card de progresso do ciclo
+    st.markdown(
+        f"""<div style="background:#004550;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+            <span style="color:#fff;font-size:0.9rem;">
+              ✅ <b>{len(ja_contados_ciclo & produtos_lista)}</b> contados &nbsp;|&nbsp;
+              ⬜ <b>{len(faltam)}</b> pendentes &nbsp;|&nbsp;
+              📤 <b>{len(uploads_anteriores)}</b> upload(s)
+            </span>
+            <span style="color:{cor_prog};font-weight:bold;">{pct_ciclo:.1f}%</span>
+          </div>
+          <div style="background:#003040;border-radius:4px;height:10px;">
+            <div style="background:{cor_prog};width:{min(pct_ciclo,100):.1f}%;height:10px;border-radius:4px;"></div>
+          </div></div>""",
+        unsafe_allow_html=True)
 
-                col_conf, col_cancel = st.columns([2,1])
-                with col_conf:
-                    if st.button("✅ Confirmar e fechar ciclo", key="ic_fechar", type="primary"):
-                        fechar_ciclo(empresa_sel, filial_sel, {
-                            "num_inv":           res.get("num_inv","—"),
-                            "data":              res.get("data","—"),
-                            "data_iso":          res.get("data_iso", date.today().isoformat()),
-                            "responsavel":       res.get("responsavel","—"),
-                            "acuracidade":       res.get("acuracidade","—"),
-                            "produtos_contados": list(contados_no_ciclo),
-                            "cobertura_pct":     pct_ciclo,
-                        })
-                        st.success(f"Ciclo fechado! {len(contados_no_ciclo)} produtos registrados.")
-                        st.rerun()
-                with col_cancel:
-                    if st.button("✖ Cancelar ciclo", key="ic_cancelar"):
-                        st.session_state[_chave_ciclo_ativo(empresa_sel, filial_sel)] = None
-                        st.rerun()
+    # Histórico de uploads do ciclo
+    if uploads_anteriores:
+        with st.expander(f"📤 Uploads realizados neste ciclo ({len(uploads_anteriores)})"):
+            df_ups = pd.DataFrame([{
+                "Etapa":        i+1,
+                "Nº Inventário":u.get("num_inv","—"),
+                "Data":         u.get("data","—"),
+                "Responsável":  u.get("responsavel","—"),
+                "Acuracidade":  u.get("acuracidade","—"),
+                "Produtos":     len(u.get("produtos",[])),
+            } for i,u in enumerate(uploads_anteriores)])
+            st.dataframe(df_ups, use_container_width=True, hide_index=True)
 
-            except Exception as e:
-                st.error(f"Erro ao processar arquivo: {e}")
-        else:
-            if st.button("✖ Cancelar ciclo", key="ic_cancelar_sem_upload"):
-                st.session_state[_chave_ciclo_ativo(empresa_sel, filial_sel)] = None
+    st.markdown(f"#### Etapa {len(uploads_anteriores)+1} — Adicionar resultado WMS")
+    st.caption("Faça o upload do Excel gerado pelo WMS para esta etapa.")
+
+    arquivo = st.file_uploader(
+        "Selecione o arquivo Excel do WMS",
+        type=["xlsx"],
+        key=f"ic_upload_{len(uploads_anteriores)}"
+    )
+
+    if arquivo:
+        try:
+            res    = processar_resultado_wms(arquivo)
+            df_wms = res["df"]
+
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("Nº Inventário", res.get("num_inv","—"))
+            c2.metric("Data",          res.get("data","—"))
+            c3.metric("Responsável",   res.get("responsavel","—"))
+            c4.metric("Acuracidade",   res.get("acuracidade","—"))
+
+            produtos_wms      = set(res["produtos"])
+            novos_desta_etapa = (produtos_lista & produtos_wms) - ja_contados_ciclo
+            ja_tinham         = produtos_lista & produtos_wms & ja_contados_ciclo
+            fora_da_lista     = produtos_wms - produtos_lista
+
+            st.markdown("#### Resultado desta etapa")
+            col_a, col_b, col_c = st.columns(3)
+            col_a.metric("✅ Novos contados",    len(novos_desta_etapa))
+            col_b.metric("🔁 Já contados antes", len(ja_tinham))
+            col_c.metric("➕ Fora da lista",      len(fora_da_lista))
+
+            df_wms["Status"] = df_wms["Codigo"].apply(
+                lambda p: "✅ Novo" if p in novos_desta_etapa else
+                          "🔁 Já contado" if p in ja_tinham else
+                          "➕ Fora da lista" if p in fora_da_lista else "—"
+            )
+            st.dataframe(
+                df_wms[["Codigo","Descricao","Qtd Antes","Qtd Depois","Qtd Diferença","Acuracidade","Status"]],
+                use_container_width=True, hide_index=True)
+
+            if st.button("📥 Adicionar esta etapa ao ciclo", key="ic_add_etapa", type="primary"):
+                acumular_upload(empresa_sel, filial_sel, {
+                    "num_inv":     res.get("num_inv","—"),
+                    "data":        res.get("data","—"),
+                    "data_iso":    res.get("data_iso", date.today().isoformat()),
+                    "responsavel": res.get("responsavel","—"),
+                    "acuracidade": res.get("acuracidade","—"),
+                    "produtos":    list(produtos_lista & produtos_wms),
+                })
+                st.success(f"Etapa adicionada! {len(novos_desta_etapa)} novos produtos contados.")
                 st.rerun()
 
+        except Exception as e:
+            st.error(f"Erro ao processar arquivo: {e}")
+
+    # Botão fechar — só libera com 100%
+    st.markdown("---")
+    if pct_ciclo >= 100:
+        if st.button("🏁 Fechar inventário", key="ic_fechar", type="primary"):
+            fechar_ciclo(empresa_sel, filial_sel)
+            st.success("Inventário fechado e registrado no histórico KPMG!")
+            st.rerun()
+    else:
+        col_btn, col_msg = st.columns([1,3])
+        with col_btn:
+            st.button("🏁 Fechar inventário", key="ic_fechar_bloq", disabled=True)
+        with col_msg:
+            produtos_faltam = sorted(list(faltam))[:10]
+            mais = len(faltam)-10 if len(faltam)>10 else 0
+            lista_str = ", ".join(f"`{p}`" for p in produtos_faltam)
+            if mais > 0: lista_str += f" e mais {mais}"
+            st.warning(f"⚠️ Faltam **{len(faltam)}** produtos: {lista_str}")
     # ── Histórico de ciclos ───────────────────────────────────────────────
     if ciclos:
         st.markdown("---")
