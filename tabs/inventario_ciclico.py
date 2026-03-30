@@ -4,9 +4,64 @@ import numpy as np
 import io
 from datetime import date
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Constantes ────────────────────────────────────────────────────────────────
 
-def calcular_score(df):
+FILIAIS_JOINVILLE = [
+    "Maquinas - Filial",
+    "Service - Matriz",
+    "Service - Filial",
+    "Tools - Filial",
+]
+
+PERIODO_KPMG_DIAS = 365  # Cobertura total exigida em 1 ano
+
+
+# ── Controle de cobertura (session_state) ─────────────────────────────────────
+
+def _chave_sessao(filial: str) -> str:
+    """Gera uma chave única no session_state para cada filial."""
+    return f"ic_contados_{filial.replace(' ', '_').replace('-', '')}"
+
+
+def inicializar_controle(filial: str):
+    """Cria o registro de contagem da filial se ainda não existir."""
+    chave = _chave_sessao(filial)
+    if chave not in st.session_state:
+        st.session_state[chave] = {}  # {produto: data_contagem (str)}
+
+
+def marcar_contados(filial: str, produtos: list):
+    """Registra os produtos como contados hoje para a filial informada."""
+    chave = _chave_sessao(filial)
+    hoje = date.today().isoformat()
+    for p in produtos:
+        st.session_state[chave][p] = hoje
+
+
+def obter_contados(filial: str) -> dict:
+    """Retorna dict {produto: data_contagem} da filial."""
+    chave = _chave_sessao(filial)
+    return st.session_state.get(chave, {})
+
+
+def resetar_contagem(filial: str):
+    """Limpa o histórico de contagem da filial (novo período)."""
+    chave = _chave_sessao(filial)
+    st.session_state[chave] = {}
+
+
+# ── Cálculo de score ──────────────────────────────────────────────────────────
+
+def calcular_score(df: pd.DataFrame, contados: dict) -> pd.DataFrame:
+    """
+    Calcula o score de prioridade de cada SKU.
+
+    Pesos:
+      30% Curva ABC (por valor total ERP)
+      25% Divergência WMS x ERP
+      25% Valor em estoque normalizado
+      20% Dias sem contagem (baseado no histórico da sessão)
+    """
     df = df.copy()
 
     # Garante tipos numéricos
@@ -14,7 +69,7 @@ def calcular_score(df):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # ── Curva ABC por valor total (peso 30%) ──────────────────────────────────
+    # ── Curva ABC por valor total (peso 30%) ──────────────────────────────
     df = df.sort_values("Vl Total ERP", ascending=False).reset_index(drop=True)
     total_valor = df["Vl Total ERP"].sum()
     if total_valor > 0:
@@ -25,19 +80,31 @@ def calcular_score(df):
                       np.where(df["pct_acum"] <= 0.95, "B", "C"))
     df["score_abc"] = df["Curva ABC"].map({"A": 10, "B": 6, "C": 3})
 
-    # ── Divergência WMS x ERP (peso 25%) ─────────────────────────────────────
+    # ── Divergência WMS x ERP (peso 25%) ──────────────────────────────────
     df["score_diverg"] = np.where(df["Divergência"] != 0, 10, 0)
 
-    # ── Valor em estoque normalizado (peso 25%) ───────────────────────────────
+    # ── Valor em estoque normalizado (peso 25%) ───────────────────────────
     max_vl = df["Vl Total ERP"].max() or 1
     df["score_valor"] = (df["Vl Total ERP"] / max_vl * 10).round(2)
 
-    # ── Dias sem contagem (peso 20%) ──────────────────────────────────────────
-    # Começa zerado — será alimentado conforme uso
-    df["Dias s/ Contagem"] = 0
-    df["score_dias"] = 2  # todos partem do mesmo patamar no início
+    # ── Dias sem contagem (peso 20%) ──────────────────────────────────────
+    hoje = date.today()
 
-    # ── Score final normalizado 0–10 ──────────────────────────────────────────
+    def dias_sem_contar(produto):
+        if produto in contados:
+            try:
+                ultima = date.fromisoformat(contados[produto])
+                return (hoje - ultima).days
+            except Exception:
+                return PERIODO_KPMG_DIAS
+        return PERIODO_KPMG_DIAS  # nunca contado = pior caso
+
+    df["Dias s/ Contagem"] = df["Produto"].astype(str).apply(dias_sem_contar)
+    # Normaliza 0-10: quem tem mais dias sem contar recebe score maior
+    max_dias = df["Dias s/ Contagem"].max() or 1
+    df["score_dias"] = (df["Dias s/ Contagem"] / max_dias * 10).round(2)
+
+    # ── Score final normalizado 0–10 ──────────────────────────────────────
     raw = (
         0.30 * df["score_abc"] +
         0.25 * df["score_diverg"] +
@@ -47,16 +114,25 @@ def calcular_score(df):
     max_raw = raw.max() or 1
     df["Score"] = (raw / max_raw * 10).round(2)
 
-    # ── Motivo principal ──────────────────────────────────────────────────────
+    # ── Já contado? ───────────────────────────────────────────────────────
+    df["Já Contado"] = df["Produto"].astype(str).apply(
+        lambda p: "✅ Sim" if p in contados else "⬜ Não"
+    )
+
+    # ── Motivo principal ──────────────────────────────────────────────────
     def motivo(row):
         razoes = []
         if row["Curva ABC"] == "A":
             razoes.append("Curva A")
         if row["Divergência"] != 0:
             razoes.append("Divergência")
+        if row["Dias s/ Contagem"] >= PERIODO_KPMG_DIAS:
+            razoes.append("Nunca contado")
+        elif row["Dias s/ Contagem"] > 180:
+            razoes.append(f"{row['Dias s/ Contagem']}d sem contar")
         if row["Vl Total ERP"] > 0:
             razoes.append(f"R$ {row['Vl Total ERP']:,.0f}")
-        return " · ".join(razoes) if razoes else "Valor em estoque"
+        return " · ".join(razoes) if razoes else "Em estoque"
 
     df["Motivo"] = df.apply(motivo, axis=1)
     df = df.sort_values("Score", ascending=False).reset_index(drop=True)
@@ -65,7 +141,47 @@ def calcular_score(df):
     return df
 
 
-def gerar_xlsx(df):
+# ── Montagem da lista com regra KPMG ─────────────────────────────────────────
+
+def montar_lista_ciclica(df_score: pd.DataFrame, qtd_ciclo: int, contados: dict) -> pd.DataFrame:
+    """
+    Monta a lista do ciclo em duas camadas:
+      1. Top N por score (alta prioridade)
+      2. Produtos nunca contados que completam a cota (regra KPMG)
+
+    Garante que ao longo do ano todos os SKUs sejam cobertos.
+    """
+    produtos_nao_contados = set(
+        df_score[~df_score["Produto"].astype(str).isin(contados.keys())]["Produto"].astype(str).tolist()
+    )
+
+    # Camada 1: top N por score
+    top_n = df_score.head(qtd_ciclo).copy()
+    top_n["Origem"] = top_n["Produto"].astype(str).apply(
+        lambda p: "⬜ Cobertura KPMG" if p in produtos_nao_contados else "🔴 Alta prioridade"
+    )
+    # Garante que todos do top N sejam incluídos
+    lista_final = top_n.copy()
+
+    # Camada 2: nunca contados que ainda não estão na lista
+    ja_na_lista = set(lista_final["Produto"].astype(str).tolist())
+    nunca_contados_fora = df_score[
+        df_score["Produto"].astype(str).isin(produtos_nao_contados) &
+        ~df_score["Produto"].astype(str).isin(ja_na_lista)
+    ].copy()
+
+    if not nunca_contados_fora.empty:
+        nunca_contados_fora["Origem"] = "⬜ Cobertura KPMG"
+        lista_final = pd.concat([lista_final, nunca_contados_fora], ignore_index=True)
+
+    lista_final = lista_final.reset_index(drop=True)
+    lista_final.index = lista_final.index + 1
+    return lista_final
+
+
+# ── Exportação Excel ──────────────────────────────────────────────────────────
+
+def gerar_xlsx(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=True, index_label="Ranking", sheet_name="Inv. Cíclico")
@@ -74,20 +190,26 @@ def gerar_xlsx(df):
 
         fmt_header = wb.add_format({
             "bold": True, "bg_color": "#004550", "font_color": "#FFFFFF",
-            "border": 1, "border_color": "#EC6E21", "align": "center",
-            "valign": "vcenter"
+            "border": 1, "border_color": "#EC6E21", "align": "center", "valign": "vcenter"
         })
-        fmt_A = wb.add_format({"bg_color": "#FFF3CD", "border": 1, "border_color": "#dee2e6"})
-        fmt_B = wb.add_format({"bg_color": "#D1ECF1", "border": 1, "border_color": "#dee2e6"})
-        fmt_C = wb.add_format({"bg_color": "#F8F9FA", "border": 1, "border_color": "#dee2e6"})
+        fmt_A      = wb.add_format({"bg_color": "#FFF3CD", "border": 1, "border_color": "#dee2e6"})
+        fmt_B      = wb.add_format({"bg_color": "#D1ECF1", "border": 1, "border_color": "#dee2e6"})
+        fmt_C      = wb.add_format({"bg_color": "#F8F9FA", "border": 1, "border_color": "#dee2e6"})
+        fmt_kpmg   = wb.add_format({"bg_color": "#E8F5E9", "border": 1, "border_color": "#dee2e6"})
 
         for col_num, col_name in enumerate(["Ranking"] + list(df.columns)):
             ws.write(0, col_num, col_name, fmt_header)
             ws.set_column(col_num, col_num, max(len(str(col_name)) + 4, 14))
 
         for row_num, (idx, row) in enumerate(df.iterrows(), start=1):
-            fmt = fmt_A if row.get("Curva ABC") == "A" else \
-                  fmt_B if row.get("Curva ABC") == "B" else fmt_C
+            if str(row.get("Origem", "")).startswith("⬜"):
+                fmt = fmt_kpmg
+            elif row.get("Curva ABC") == "A":
+                fmt = fmt_A
+            elif row.get("Curva ABC") == "B":
+                fmt = fmt_B
+            else:
+                fmt = fmt_C
             ws.write(row_num, 0, idx, fmt)
             for col_num, val in enumerate(row, start=1):
                 ws.write(row_num, col_num, val, fmt)
@@ -98,64 +220,110 @@ def gerar_xlsx(df):
 
 # ── Render principal ──────────────────────────────────────────────────────────
 
-def render(df_jlle, df_outras, formatar_br):
+def render(df_jlle: pd.DataFrame, df_outras: pd.DataFrame, formatar_br):
     st.markdown("## 🔄 Inventário Cíclico")
-    st.markdown("Geração inteligente de listas de contagem baseada em score de priorização.")
+    st.markdown(
+        "Geração inteligente de listas de contagem com **regra KPMG**: "
+        "todos os SKUs devem ser contados ao menos uma vez por ano."
+    )
 
-    # Junta Joinville + Outras filiais
-    df_total = pd.concat([df_jlle, df_outras], ignore_index=True)
-
-    if df_total.empty:
-        st.warning("Nenhum dado de auditoria encontrado. Carregue os dados na sidebar.")
+    if df_jlle is None or df_jlle.empty:
+        st.warning("Nenhum dado de Joinville encontrado. Carregue os dados na sidebar.")
         return
 
-    # Calcula score
-    df_score = calcular_score(df_total)
+    # ── Seleção de filial ─────────────────────────────────────────────────
+    st.markdown("### 1. Selecione a filial")
+    filiais_disponiveis = sorted(
+        [f for f in FILIAIS_JOINVILLE if f in df_jlle["Filial"].dropna().unique()]
+    )
 
-    # ── Métricas resumo ───────────────────────────────────────────────────────
-    total_skus = len(df_score)
-    total_diverg = int((df_score["Divergência"] != 0).sum())
-    valor_total = df_score["Vl Total ERP"].sum()
-    skus_A = int((df_score["Curva ABC"] == "A").sum())
+    if not filiais_disponiveis:
+        st.error("Nenhuma filial de Joinville encontrada nos dados carregados.")
+        return
+
+    filial_sel = st.selectbox(
+        "Filial",
+        filiais_disponiveis,
+        key="ic_filial_sel",
+        help="A lista será gerada exclusivamente para os SKUs desta filial."
+    )
+
+    # Filtra apenas a filial selecionada
+    df_filial = df_jlle[df_jlle["Filial"] == filial_sel].copy()
+
+    if df_filial.empty:
+        st.warning(f"Sem dados para a filial **{filial_sel}**.")
+        return
+
+    # Inicializa controle de sessão para esta filial
+    inicializar_controle(filial_sel)
+    contados = obter_contados(filial_sel)
+
+    # ── Calcula score ─────────────────────────────────────────────────────
+    df_score = calcular_score(df_filial, contados)
+    total_skus       = len(df_score)
+    total_contados   = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
+    pct_cobertura    = (total_contados / total_skus * 100) if total_skus > 0 else 0
+    total_diverg     = int((df_score["Divergência"] != 0).sum())
+    skus_A           = int((df_score["Curva ABC"] == "A").sum())
+    valor_total      = df_score["Vl Total ERP"].sum()
+
+    # ── Métricas ──────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"### 2. Visão geral — {filial_sel}")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total de SKUs", f"{total_skus:,}")
-    c2.metric("SKUs Divergentes", f"{total_diverg:,}")
-    c3.metric("SKUs Curva A", f"{skus_A:,}")
-    c4.metric("Valor Total Estoque", f"R$ {formatar_br(valor_total)}")
+    c1.metric("Total de SKUs",        f"{total_skus:,}")
+    c2.metric("SKUs Divergentes",     f"{total_diverg:,}")
+    c3.metric("SKUs Curva A",         f"{skus_A:,}")
+    c4.metric("Valor Total Estoque",  f"R$ {formatar_br(valor_total)}")
 
+    # ── Barra de cobertura KPMG ───────────────────────────────────────────
+    st.markdown("#### Cobertura KPMG (ano vigente)")
+    falta = total_skus - total_contados
+
+    cor_barra = "#27AE60" if pct_cobertura >= 100 else "#EC6E21"
+    st.markdown(
+        f"""
+        <div style="background:#004550;border-radius:8px;padding:12px 16px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+            <span style="color:#fff;font-size:0.9rem;">
+              ✅ <b>{total_contados}</b> contados &nbsp;|&nbsp;
+              ⬜ <b>{falta}</b> pendentes
+            </span>
+            <span style="color:{cor_barra};font-weight:bold;font-size:0.95rem;">
+              {pct_cobertura:.1f}%
+            </span>
+          </div>
+          <div style="background:#003040;border-radius:4px;height:10px;">
+            <div style="background:{cor_barra};width:{min(pct_cobertura,100):.1f}%;
+                        height:10px;border-radius:4px;transition:width 0.4s;">
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if pct_cobertura >= 100:
+        st.success("🎉 Todos os SKUs foram contados neste período. Exigência KPMG cumprida!")
+
+    # Botão para resetar contagem (novo período)
+    with st.expander("⚙️ Controles do período"):
+        st.caption(
+            "Ao iniciar um novo período anual, clique abaixo para zerar o histórico desta filial."
+        )
+        if st.button(f"🔄 Iniciar novo período — {filial_sel}", key="ic_reset"):
+            resetar_contagem(filial_sel)
+            st.success("Histórico zerado. Novo período iniciado!")
+            st.rerun()
+
+    # ── Seleção de quantidade ─────────────────────────────────────────────
     st.markdown("---")
+    st.markdown("### 3. Defina o tamanho do ciclo")
 
-    # ── Filtros ───────────────────────────────────────────────────────────────
-    col_f1, col_f2, col_f3 = st.columns(3)
-    with col_f1:
-        empresas = ["Todas"] + sorted(df_score["Empresa"].dropna().unique().tolist())
-        empresa_sel = st.selectbox("🏢 Empresa", empresas, key="ic_empresa")
-    with col_f2:
-        if empresa_sel != "Todas":
-            filiais_disp = ["Todas"] + sorted(
-                df_score[df_score["Empresa"] == empresa_sel]["Filial"].dropna().unique().tolist()
-            )
-        else:
-            filiais_disp = ["Todas"] + sorted(df_score["Filial"].dropna().unique().tolist())
-        filial_sel = st.selectbox("📍 Filial", filiais_disp, key="ic_filial")
-    with col_f3:
-        curva_sel = st.multiselect("📊 Curva ABC", ["A", "B", "C"], default=["A", "B", "C"], key="ic_curva")
-
-    df_filtrado = df_score.copy()
-    if empresa_sel != "Todas":
-        df_filtrado = df_filtrado[df_filtrado["Empresa"] == empresa_sel]
-    if filial_sel != "Todas":
-        df_filtrado = df_filtrado[df_filtrado["Filial"] == filial_sel]
-    if curva_sel:
-        df_filtrado = df_filtrado[df_filtrado["Curva ABC"].isin(curva_sel)]
-
-    total_filtrado = len(df_filtrado)
-
-    # ── Seleção de quantidade ─────────────────────────────────────────────────
-    st.markdown("### Quantidade de itens para o ciclo")
     modo = st.radio(
-        "Modo",
+        "Modo de seleção",
         ["Quantidade fixa", "Percentual do estoque"],
         horizontal=True,
         key="ic_modo"
@@ -168,16 +336,16 @@ def render(df_jlle, df_outras, formatar_br):
             st.session_state.ic_qtd = 50
         for col, qtd in qtd_opcoes.items():
             with col:
-                if st.button(f"{qtd} itens", key=f"ic_btn_{qtd}",
-                             type="primary" if st.session_state.ic_qtd == qtd else "secondary"):
+                tipo = "primary" if st.session_state.ic_qtd == qtd else "secondary"
+                if st.button(f"{qtd} itens", key=f"ic_btn_{qtd}", type=tipo):
                     st.session_state.ic_qtd = qtd
-        qtd_final = min(st.session_state.ic_qtd, total_filtrado)
+        qtd_ciclo = min(st.session_state.ic_qtd, total_skus)
 
     else:
         pct_opcoes = {
-            "5% — Críticos": 0.05,
+            "5% — Críticos":       0.05,
             "10% — Alta prioridade": 0.10,
-            "20% — Rotina": 0.20,
+            "20% — Rotina":        0.20,
             "30% — Controle amplo": 0.30,
         }
         pct_label = st.select_slider(
@@ -186,54 +354,97 @@ def render(df_jlle, df_outras, formatar_br):
             value="10% — Alta prioridade",
             key="ic_pct"
         )
-        pct_val = pct_opcoes[pct_label]
-        qtd_final = max(1, int(total_filtrado * pct_val))
-        st.caption(f"→ {qtd_final} itens selecionados de {total_filtrado} disponíveis")
+        pct_val   = pct_opcoes[pct_label]
+        qtd_ciclo = max(1, int(total_skus * pct_val))
+        st.caption(f"→ {qtd_ciclo} itens selecionados de {total_skus} disponíveis")
 
-    # ── Tabela resultado ──────────────────────────────────────────────────────
-    st.markdown(f"### Lista do ciclo — Top {qtd_final} itens por score")
+    # ── Monta lista com regra KPMG ────────────────────────────────────────
+    df_lista = montar_lista_ciclica(df_score, qtd_ciclo, contados)
+
+    qtd_prioridade = int((df_lista["Origem"] == "🔴 Alta prioridade").sum())
+    qtd_kpmg       = int((df_lista["Origem"] == "⬜ Cobertura KPMG").sum())
+
+    st.markdown("---")
+    st.markdown(
+        f"### 4. Lista do ciclo — {len(df_lista)} itens  "
+        f"<span style='font-size:0.8rem;color:#EC6E21;'>🔴 {qtd_prioridade} por prioridade</span>  "
+        f"<span style='font-size:0.8rem;color:#27AE60;'> ⬜ {qtd_kpmg} cobertura KPMG</span>",
+        unsafe_allow_html=True,
+    )
 
     colunas_exibir = [
-        "Produto", "Descrição", "Empresa", "Filial",
-        "Curva ABC", "Score", "Saldo ERP (Total)", "Saldo WMS",
-        "Divergência", "Vl Total ERP", "Motivo"
+        "Produto", "Descrição", "Filial",
+        "Curva ABC", "Score", "Já Contado", "Dias s/ Contagem",
+        "Saldo ERP (Total)", "Saldo WMS", "Divergência",
+        "Vl Total ERP", "Motivo", "Origem"
     ]
-    colunas_ok = [c for c in colunas_exibir if c in df_filtrado.columns]
-    df_exibir = df_filtrado[colunas_ok].head(qtd_final)
+    colunas_ok = [c for c in colunas_exibir if c in df_lista.columns]
+    df_exibir  = df_lista[colunas_ok]
 
     st.dataframe(
         df_exibir.style.apply(
-            lambda r: ["background-color: #005562; color: #ffffff; font-size: 0.84rem;"] * len(r), axis=1
+            lambda r: ["background-color: #005562; color: #ffffff; font-size: 0.84rem;"] * len(r),
+            axis=1
         ).set_table_styles([
             {"selector": "thead th", "props": [
                 ("background-color", "#004550"), ("color", "#ffffff"),
                 ("border-bottom", "2px solid #EC6E21"), ("text-transform", "uppercase")
             ]},
             {"selector": "td", "props": [
-                ("padding", "8px 12px"), ("border-bottom", "1px solid rgba(255,255,255,0.05)")
+                ("padding", "8px 12px"),
+                ("border-bottom", "1px solid rgba(255,255,255,0.05)")
             ]}
         ]).format({
             "Saldo ERP (Total)": "{:,.2f}",
-            "Saldo WMS": "{:,.2f}",
-            "Divergência": "{:,.2f}",
-            "Vl Total ERP": "R$ {:,.2f}",
-            "Score": "{:.2f}",
+            "Saldo WMS":         "{:,.2f}",
+            "Divergência":       "{:,.2f}",
+            "Vl Total ERP":      "R$ {:,.2f}",
+            "Score":             "{:.2f}",
+            "Dias s/ Contagem":  "{:.0f}d",
         }, na_rep="-"),
         use_container_width=True,
         hide_index=False,
     )
 
-    # ── Exportação ────────────────────────────────────────────────────────────
+    # ── Marcar como contados ──────────────────────────────────────────────
     st.markdown("---")
-    st.markdown("### Exportar lista para contagem")
+    st.markdown("### 5. Registrar contagem realizada")
+    st.caption(
+        "Após realizar a contagem física, marque os produtos abaixo. "
+        "Isso atualiza o progresso KPMG e ajusta o score dos próximos ciclos."
+    )
+
+    produtos_lista = df_exibir["Produto"].astype(str).tolist()
+    produtos_sel   = st.multiselect(
+        "Selecione os produtos contados neste ciclo",
+        options=produtos_lista,
+        key="ic_marcar"
+    )
+
+    if st.button("✅ Confirmar contagem dos produtos selecionados", key="ic_confirmar"):
+        if produtos_sel:
+            marcar_contados(filial_sel, produtos_sel)
+            st.success(f"{len(produtos_sel)} produto(s) marcado(s) como contado(s). Score atualizado!")
+            st.rerun()
+        else:
+            st.warning("Selecione ao menos um produto antes de confirmar.")
+
+    # ── Exportação ────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 6. Exportar lista para contagem")
     col_ex1, col_ex2 = st.columns([2, 1])
     with col_ex1:
-        st.caption(f"O arquivo gerado contém {qtd_final} itens ordenados por score de prioridade.")
+        st.caption(
+            f"O arquivo contém {len(df_exibir)} itens ordenados por score. "
+            f"Filial: {filial_sel}."
+        )
     with col_ex2:
-        nome_arquivo = f"inventario_ciclico_{date.today().strftime('%d%m%Y')}.xlsx"
+        nome_arquivo = (
+            f"inv_ciclico_{filial_sel.replace(' ', '_').replace('-', '')}_{date.today().strftime('%d%m%Y')}.xlsx"
+        )
         st.download_button(
             label="📥 Baixar Excel para Contagem",
             data=gerar_xlsx(df_exibir),
             file_name=nome_arquivo,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
