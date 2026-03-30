@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 from sqlalchemy import create_engine
-from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, buscar_ultima_movimentacao_geral, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
+from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
 from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
@@ -187,7 +187,7 @@ if df_base is not None:
     with tab3:
         indicadores.render(dff_jlle, formatar_br)
     with tab4:
-        movimentacoes.render(f_code.zfill(6) if f_code else "", get_engine(), buscar_movimentacoes_nuvem, buscar_ultima_movimentacao_geral, estilizar_tabela, to_float_br)
+        movimentacoes.render(f_code.zfill(6) if f_code else "", get_engine(), buscar_movimentacoes_nuvem, estilizar_tabela, to_float_br)
     with tab5:
         inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)
 else:
