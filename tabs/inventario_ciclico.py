@@ -487,10 +487,19 @@ def render(df_jlle, df_outras, formatar_br):
             df_wms = res["df"]
 
             c1,c2,c3,c4 = st.columns(4)
-            c1.metric("Nº Inventário", res.get("num_inv","—"))
-            c2.metric("Data",          res.get("data","—"))
-            c3.metric("Responsável",   res.get("responsavel","—"))
-            c4.metric("Acuracidade",   res.get("acuracidade","—"))
+            for col, label, val in [
+                (c1, "Nº Inventário", res.get("num_inv","—")),
+                (c2, "Data",          res.get("data","—")),
+                (c3, "Responsável",   res.get("responsavel","—")),
+                (c4, "Acuracidade",   res.get("acuracidade","—")),
+            ]:
+                col.markdown(
+                    f"""<div style="border:2px solid #EC6E21;border-radius:10px;padding:15px;background:#004550;">
+                      <div style="color:#aaa;font-size:0.8rem;margin-bottom:4px;">{label}</div>
+                      <div style="color:#fff;font-size:1.1rem;font-weight:700;word-break:break-word;">{val}</div>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
 
             produtos_wms      = set(res["produtos"])
             novos_desta_etapa = (produtos_lista & produtos_wms) - ja_contados_ciclo
