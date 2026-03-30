@@ -85,10 +85,14 @@ with st.sidebar:
                     if df_auditoria.empty:
                         st.error("Cruzamento resultou em dados vazios. Verifique os arquivos.")
                     else:
+                        # Diagnóstico por empresa
+                        resumo = df_auditoria.groupby("Empresa")["Produto"].count().reset_index()
+                        resumo.columns = ["Empresa", "Linhas"]
+                        st.dataframe(resumo, use_container_width=True, hide_index=True)
                         engine = get_engine()
                         if engine:
                             df_auditoria.to_sql("auditoria", engine, if_exists="replace", index=False)
-                            st.success(f"✅ {len(df_auditoria)} linhas gravadas com rateio correto!")
+                            st.success(f"✅ {len(df_auditoria)} linhas gravadas!")
                         else:
                             st.error("Sem conexão com o banco.")
                 except Exception as e:
