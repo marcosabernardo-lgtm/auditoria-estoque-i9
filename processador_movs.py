@@ -210,3 +210,28 @@ def buscar_movimentacoes_nuvem(engine, produto_cod):
         return pd.read_sql(query, engine, params={"p": codigo_normalizado})
     except Exception as exc:
         raise RuntimeError(f"Erro ao consultar movimentações para '{produto_cod}': {exc}") from exc
+
+
+def buscar_ultima_movimentacao_geral(engine):
+    """
+    Retorna apenas a última entrada e a última saída registradas no banco,
+    independente de produto ou filial. Usado na aba Movimentações sem filtro.
+    """
+    if engine is None:
+        raise ConnectionError("Engine não inicializada. Verifique a conexão com o banco.")
+    try:
+        query = text("""
+            SELECT * FROM movimentacoes
+            WHERE "DIGITACAO" = (
+                SELECT MAX("DIGITACAO") FROM movimentacoes WHERE "TIPOMOVIMENTO" = 'Entrada'
+            ) AND "TIPOMOVIMENTO" = 'Entrada'
+            UNION ALL
+            SELECT * FROM movimentacoes
+            WHERE "DIGITACAO" = (
+                SELECT MAX("DIGITACAO") FROM movimentacoes WHERE "TIPOMOVIMENTO" = 'Saída'
+            ) AND "TIPOMOVIMENTO" = 'Saída'
+            LIMIT 2
+        """)
+        return pd.read_sql(query, engine)
+    except Exception as exc:
+        raise RuntimeError(f"Erro ao buscar última movimentação geral: {exc}") from exc
