@@ -6,19 +6,16 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # ── Mapeamento empresa+cod → nome completo (igual ao processador_movs) ────────
+# Mapa exato da tabela de referência (ID → Filial)
+# A chave é sempre normalizada sem acento antes do lookup
 MAPA_FILIAIS = {
     "Tools 00":      "Tools - Matriz",
     "Tools 01":      "Tools - Filial",
     "Maquinas 00":   "Maquinas - Matriz",
     "Maquinas 01":   "Maquinas - Filial",
     "Maquinas 02":   "Maquinas - Jundiai",
-    "Máquinas 00":   "Maquinas - Matriz",
-    "Máquinas 01":   "Maquinas - Filial",
-    "Máquinas 02":   "Maquinas - Jundiai",
     "Robotica 00":   "Robotica - Matriz",
     "Robotica 01":   "Robotica - Jaragua",
-    "Robótica 00":   "Robotica - Matriz",
-    "Robótica 01":   "Robotica - Jaragua",
     "Service 01":    "Service - Matriz",
     "Service 02":    "Service - Filial",
     "Service 03":    "Service - Caxias",
@@ -36,18 +33,21 @@ def _normalizar_empresa(texto):
     )
     return sem_acento.strip()
 
-# Mapa secundário sem acentos (fallback)
-MAPA_FILIAIS_NORM = {
-    _normalizar_empresa(k): v for k, v in MAPA_FILIAIS.items()
-}
+
 
 
 def _resolver_filial(chave):
-    """Tenta resolver pelo mapa original; se falhar, tenta sem acentos."""
+    """
+    Resolve chave Empresa+Filial para nome completo.
+    Normaliza acentos antes do lookup para garantir match independente
+    de como o nome da aba está escrito no Excel (Máquinas vs Maquinas).
+    """
+    # Tenta direto primeiro
     if chave in MAPA_FILIAIS:
         return MAPA_FILIAIS[chave]
+    # Normaliza acento e tenta de novo
     chave_norm = _normalizar_empresa(chave)
-    return MAPA_FILIAIS_NORM.get(chave_norm, chave)
+    return MAPA_FILIAIS.get(chave_norm, chave)
 
 
 def _limpar_produto(serie):
@@ -179,10 +179,12 @@ def _ler_erp(arquivo):
     if "Armazem" in df.columns:
         df["Armazem"] = _limpar_cod(df["Armazem"], 2)
 
-    df["Chave"] = df["Empresa_Aba"].str.strip() + " " + df["Filial_Cod"].str.strip()
+    # Normaliza nome da aba (remove acentos) para garantir match no mapa
+    df["Empresa_Norm"] = df["Empresa_Aba"].apply(_normalizar_empresa)
+    df["Chave"] = df["Empresa_Norm"].str.strip() + " " + df["Filial_Cod"].str.strip()
     df["Filial"] = df["Chave"].apply(_resolver_filial)
     df["Empresa"] = df["Filial"].str.split(" - ").str[0].str.strip()
-    df = df.drop(columns=["Chave", "Filial_Cod", "Empresa_Aba"], errors="ignore")
+    df = df.drop(columns=["Chave", "Filial_Cod", "Empresa_Aba", "Empresa_Norm"], errors="ignore")
 
     subset = [c for c in ["Filial", "Produto", "Armazem"] if c in df.columns]
     df = df.drop_duplicates(subset=subset)
