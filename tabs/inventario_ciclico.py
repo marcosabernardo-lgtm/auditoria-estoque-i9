@@ -187,13 +187,23 @@ def calcular_score(df: pd.DataFrame, contados: dict) -> pd.DataFrame:
 
 def montar_lista(df_score, qtd, contados):
     nao_cont = set(df_score[~df_score["Produto"].astype(str).isin(contados)]["Produto"].astype(str))
+    # Camada 1: Top N por score
     top = df_score.head(qtd).copy()
-    top["Origem"] = top["Produto"].astype(str).apply(lambda p: "⬜ Cobertura KPMG" if p in nao_cont else "🔴 Alta prioridade")
+    top["Origem"] = top["Produto"].astype(str).apply(
+        lambda p: "⬜ Cobertura KPMG" if p in nao_cont else "🔴 Alta prioridade"
+    )
     ja = set(top["Produto"].astype(str))
-    extras = df_score[df_score["Produto"].astype(str).isin(nao_cont) & ~df_score["Produto"].astype(str).isin(ja)].copy()
-    if not extras.empty:
-        extras["Origem"] = "⬜ Cobertura KPMG"
-        top = pd.concat([top, extras], ignore_index=True)
+    # Camada 2: nunca contados que faltam para completar a cota
+    # Só adiciona se ainda há vagas (qtd - len(top que já é nunca contado))
+    vagas = qtd - len(top)
+    if vagas > 0:
+        extras = df_score[
+            df_score["Produto"].astype(str).isin(nao_cont) &
+            ~df_score["Produto"].astype(str).isin(ja)
+        ].head(vagas).copy()
+        if not extras.empty:
+            extras["Origem"] = "⬜ Cobertura KPMG"
+            top = pd.concat([top, extras], ignore_index=True)
     top = top.reset_index(drop=True)
     top.index = top.index + 1
     return top
