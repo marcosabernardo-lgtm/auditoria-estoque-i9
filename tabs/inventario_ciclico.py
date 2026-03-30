@@ -305,6 +305,11 @@ def render(df_jlle, df_outras, formatar_br):
         st.warning(f"Sem dados para **{label}**."); return
 
     inicializar(empresa_sel, filial_sel)
+
+    # Mensagem de sucesso após fechar (deve vir antes de recalcular)
+    if st.session_state.pop("ic_fechado_msg", False):
+        st.success("✅ Inventário fechado e registrado no histórico KPMG!")
+
     contados  = obter_contados(empresa_sel, filial_sel)
     ciclos    = obter_ciclos(empresa_sel, filial_sel)
     ciclo_ativo = obter_ciclo_ativo(empresa_sel, filial_sel)
@@ -544,10 +549,7 @@ def render(df_jlle, df_outras, formatar_br):
             st.session_state["ic_fechado_msg"] = True
             st.rerun()
 
-    # Mensagem de sucesso após fechar (persiste um ciclo de rerun)
-    if st.session_state.pop("ic_fechado_msg", False):
-        st.success("✅ Inventário fechado e registrado no histórico KPMG!")
-        st.balloons()
+
     else:
         col_btn, col_msg = st.columns([1,3])
         with col_btn:
