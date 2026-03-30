@@ -24,90 +24,62 @@ except ImportError:
 
 PERIODO_KPMG_DIAS = 365
 
-# ── Helpers de chave ──────────────────────────────────────────────────────────
+# Importa módulo de persistência (Supabase)
+try:
+    from inventario_db import (
+        db_obter_contados, db_marcar_contados, db_resetar_contados,
+        db_obter_ciclos, db_gravar_ciclo, db_resetar_ciclos,
+        db_obter_ciclo_ativo, db_salvar_ciclo_ativo,
+        db_acumular_upload, db_fechar_ciclo_ativo, db_resetar_tudo,
+    )
+    DB_DISPONIVEL = True
+except ImportError:
+    DB_DISPONIVEL = False
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _slug(empresa, filial):
     return f"{empresa}_{filial}".replace(" ", "_").replace("-", "")
 
-def _chave_contados(e, f):   return f"ic_contados_{_slug(e,f)}"
-def _chave_ciclos(e, f):     return f"ic_ciclos_{_slug(e,f)}"
-def _chave_ciclo_ativo(e, f):return f"ic_ciclo_ativo_{_slug(e,f)}"
-def _chave_uploads(e, f):    return f"ic_uploads_{_slug(e,f)}"
-
-def inicializar(e, f):
-    for k, v in [
-        (_chave_contados(e,f),    {}),
-        (_chave_ciclos(e,f),      []),
-        (_chave_ciclo_ativo(e,f), None),
-        (_chave_uploads(e,f),     []),   # lista de uploads do ciclo atual
-    ]:
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-def obter_uploads(e, f):     return st.session_state.get(_chave_uploads(e,f), [])
-
-def acumular_upload(e, f, upload_info: dict):
-    """Acumula um novo upload no ciclo atual (união de produtos)."""
-    uploads = st.session_state[_chave_uploads(e,f)]
-    uploads.append(upload_info)
-    st.session_state[_chave_uploads(e,f)] = uploads
-
 def produtos_contados_no_ciclo(e, f) -> set:
-    """Retorna união de todos os produtos contados nos uploads do ciclo."""
+    """Retorna união de todos os produtos contados nos uploads do ciclo ativo."""
+    ciclo = db_obter_ciclo_ativo(e, f)
+    if not ciclo:
+        return set()
     todos = set()
-    for u in obter_uploads(e, f):
+    for u in ciclo.get("uploads", []):
         todos.update(u.get("produtos", []))
     return todos
 
-def obter_contados(e, f):    return st.session_state.get(_chave_contados(e,f), {})
-def obter_ciclos(e, f):      return st.session_state.get(_chave_ciclos(e,f), [])
-def obter_ciclo_ativo(e, f): return st.session_state.get(_chave_ciclo_ativo(e,f))
-
-def salvar_ciclo_ativo(e, f, ciclo):
-    st.session_state[_chave_ciclo_ativo(e,f)] = ciclo
-
 def fechar_ciclo(e, f):
-    """Fecha o ciclo, marca todos os produtos contados e registra no histórico."""
-    ciclo   = obter_ciclo_ativo(e, f)
-    uploads = obter_uploads(e, f)
+    """Fecha o ciclo, persiste no banco e marca produtos como contados."""
+    ciclo   = db_obter_ciclo_ativo(e, f)
     if not ciclo:
         return
-
-    # União de todos os produtos contados nos uploads
+    uploads = ciclo.get("uploads", [])
     todos_contados = produtos_contados_no_ciclo(e, f)
     data_iso = uploads[-1].get("data_iso", date.today().isoformat()) if uploads else date.today().isoformat()
 
-    # Atualiza contados globais
-    contados = st.session_state[_chave_contados(e,f)]
-    for p in todos_contados:
-        contados[p] = data_iso
-
-    # Monta registro do ciclo
     produtos_lista = set(ciclo.get("produtos_lista", []))
     pct = len(todos_contados & produtos_lista) / len(produtos_lista) * 100 if produtos_lista else 0
 
     ciclo_fechado = {
         **ciclo,
-        "uploads":          len(uploads),
-        "produtos_contados":list(todos_contados),
-        "cobertura_pct":    pct,
-        "data_fechamento":  date.today().strftime("%d/%m/%Y"),
-        "status":           "Concluído",
-        # Metadados do último upload
-        "num_inv":          uploads[-1].get("num_inv","—") if uploads else "—",
-        "data":             uploads[-1].get("data","—")    if uploads else "—",
-        "responsavel":      uploads[-1].get("responsavel","—") if uploads else "—",
-        "acuracidade":      uploads[-1].get("acuracidade","—") if uploads else "—",
+        "uploads":           len(uploads),
+        "produtos_contados": list(todos_contados),
+        "cobertura_pct":     pct,
+        "data_fechamento":   date.today().strftime("%d/%m/%Y"),
+        "status":            "Concluído",
+        "num_inv":           uploads[-1].get("num_inv","—")      if uploads else "—",
+        "data":              uploads[-1].get("data","—")         if uploads else "—",
+        "responsavel":       uploads[-1].get("responsavel","—")  if uploads else "—",
+        "acuracidade":       uploads[-1].get("acuracidade","—")  if uploads else "—",
     }
-    st.session_state[_chave_ciclos(e,f)].append(ciclo_fechado)
-    st.session_state[_chave_ciclo_ativo(e,f)] = None
-    st.session_state[_chave_uploads(e,f)]     = []
-
-def resetar(e, f):
-    st.session_state[_chave_contados(e,f)]    = {}
-    st.session_state[_chave_ciclos(e,f)]      = []
-    st.session_state[_chave_ciclo_ativo(e,f)] = None
-    st.session_state[_chave_uploads(e,f)]     = []
+    # Persiste no banco
+    db_gravar_ciclo(e, f, ciclo_fechado)
+    db_marcar_contados(e, f, list(todos_contados),
+                       data=data_iso, num_ciclo=ciclo.get("num_ciclo",""))
+    db_fechar_ciclo_ativo(e, f)
 
 
 # ── Processador resultado WMS ─────────────────────────────────────────────────
@@ -577,15 +549,14 @@ def render(df_jlle, df_outras, formatar_br):
     if df_filial.empty:
         st.warning(f"Sem dados para **{label}**."); return
 
-    inicializar(empresa_sel, filial_sel)
-
-    # Mensagem de sucesso após fechar (deve vir antes de recalcular)
+    # Mensagem de sucesso após fechar
     if st.session_state.pop("ic_fechado_msg", False):
         st.success("✅ Inventário fechado e registrado no histórico KPMG!")
 
-    contados  = obter_contados(empresa_sel, filial_sel)
-    ciclos    = obter_ciclos(empresa_sel, filial_sel)
-    ciclo_ativo = obter_ciclo_ativo(empresa_sel, filial_sel)
+    # Carrega dados do banco
+    contados    = db_obter_contados(empresa_sel, filial_sel)
+    ciclos      = db_obter_ciclos(empresa_sel, filial_sel)
+    ciclo_ativo = db_obter_ciclo_ativo(empresa_sel, filial_sel)
 
     df_score   = calcular_score(df_filial, contados)
     total_skus = len(df_score)
@@ -698,21 +669,24 @@ def render(df_jlle, df_outras, formatar_br):
     with col_info:
         st.info(f"Nº do ciclo: **{num_ciclo}**")
 
-    # Guarda a lista atual no session_state para cruzar com o upload
-    st.session_state[f"ic_lista_atual_{_slug(empresa_sel,filial_sel)}"] = {
+    # Salva ciclo ativo no banco
+    db_salvar_ciclo_ativo(empresa_sel, filial_sel, {
         "num_ciclo":      num_ciclo,
         "data_geracao":   date.today().strftime("%d/%m/%Y"),
         "label":          label,
         "qtd_lista":      len(df_exibir),
         "produtos_lista": df_exibir["Produto"].astype(str).tolist(),
-    }
+        "uploads":        [],
+        "status":         "Em andamento",
+    })
 
     # Upload do resultado WMS direto aqui
     st.markdown("---")
-    # Progresso acumulado dos uploads anteriores
-    uploads_anteriores = obter_uploads(empresa_sel, filial_sel)
+    # Recarrega ciclo ativo e progresso
+    ciclo_ativo        = db_obter_ciclo_ativo(empresa_sel, filial_sel)
+    uploads_anteriores = ciclo_ativo.get("uploads", []) if ciclo_ativo else []
     ja_contados_ciclo  = produtos_contados_no_ciclo(empresa_sel, filial_sel)
-    lista_atual        = st.session_state.get(f"ic_lista_atual_{_slug(empresa_sel,filial_sel)}", {})
+    lista_atual        = ciclo_ativo or {}
     produtos_lista     = set(lista_atual.get("produtos_lista", []))
     faltam             = produtos_lista - ja_contados_ciclo
     pct_ciclo          = len(ja_contados_ciclo & produtos_lista) / len(produtos_lista) * 100 if produtos_lista else 0
@@ -873,6 +847,6 @@ def render(df_jlle, df_outras, formatar_br):
                     st.caption("PDF indisponível — instale reportlab e matplotlib")
             with col_reset:
                 if st.button("🔄 Novo período", key="ic_reset"):
-                    resetar(empresa_sel, filial_sel)
+                    db_resetar_tudo(empresa_sel, filial_sel)
                     st.success("Novo período iniciado!")
                     st.rerun()
