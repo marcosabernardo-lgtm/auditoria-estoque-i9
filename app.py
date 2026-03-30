@@ -131,7 +131,14 @@ if df_base is not None:
     df_t2 = df_t1 if f_fil_longa == "Todas" else df_t1[df_t1["Filial"] == f_fil_longa]
     with c3: f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
 
-    f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o código...")
+    # Campo global — pode ser preenchido via clique na tabela
+    f_code_default = st.session_state.pop("f_code_global", "")
+    f_code = st.text_input(
+        "🔍 Consulta por Código",
+        value=f_code_default,
+        placeholder="Digite o código...",
+        key="f_code_input",
+    )
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
@@ -199,11 +206,6 @@ if df_base is not None:
         v_outras_view = enriquecer_com_movimentos(v_outras_view, df_movs)
 
     # CHAMADA DAS ABAS
-    # Navegação automática para Movimentações quando documento é selecionado
-    tab_idx = 3 if st.session_state.get("nav_para_mov") else 0
-    if st.session_state.get("nav_para_mov"):
-        st.session_state["nav_para_mov"] = False
-
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações", "🔄 Inv. Cíclico"])
 
     with tab1:
@@ -213,16 +215,12 @@ if df_base is not None:
     with tab3:
         indicadores.render(dff_jlle, formatar_br)
     with tab4:
-        # Usa documento do session_state se navegou via clique na tabela
-        doc_nav = st.session_state.pop("mov_doc_busca_value", None)
         movimentacoes.render(
             f_code.zfill(6) if f_code else "",
             engine=get_engine(),
             buscar_func=buscar_movimentacoes_nuvem,
-            buscar_doc_func=buscar_movimentacoes_por_documento,
             estilizar_func=estilizar_tabela,
             to_float_func=to_float_br,
-            doc_inicial=doc_nav,
         )
     with tab5:
         inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)
