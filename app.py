@@ -7,7 +7,7 @@ from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, b
 from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
-from tabs import joinville, filiais, indicadores, movimentacoes, inventario_ciclico
+from tabs import joinville, filiais, indicadores, inventario_ciclico
 
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
@@ -125,14 +125,7 @@ if df_base is not None:
     df_t2 = df_t1 if f_fil_longa == "Todas" else df_t1[df_t1["Filial"] == f_fil_longa]
     with c3: f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
 
-    # Campo global — pode ser preenchido via clique na tabela
-    f_code_default = st.session_state.pop("f_code_global", "")
-    f_code = st.text_input(
-        "🔍 Consulta por Código",
-        value=f_code_default,
-        placeholder="Digite o código...",
-        key="f_code_input",
-    )
+    f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o código...")
     dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
     if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
@@ -186,15 +179,16 @@ if df_base is not None:
 
 
     # CHAMADA DAS ABAS
-    # Injeta dependências para uso nas abas (evita re-query ao carregar)
+    # Injeta dependências para uso nas abas
     from tabs.movimentacoes import _tratar_df as _tratar_mov
     st.session_state["_engine"]         = get_engine()
     st.session_state["_buscar_func"]    = buscar_movimentacoes_nuvem
+    st.session_state["_buscar_doc_func"]= buscar_movimentacoes_por_documento
     st.session_state["_estilizar_func"] = estilizar_tabela
     st.session_state["_to_float_func"]  = to_float_br
     st.session_state["_tratar_df"]      = _tratar_mov
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações", "🔄 Inv. Cíclico"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🔄 Inv. Cíclico"])
 
     with tab1:
         joinville.render(v_jlle_view, estilizar_tabela, para_excel)
@@ -203,14 +197,6 @@ if df_base is not None:
     with tab3:
         indicadores.render(dff_jlle, formatar_br)
     with tab4:
-        movimentacoes.render(
-            f_code.zfill(6) if f_code else "",
-            engine=get_engine(),
-            buscar_func=buscar_movimentacoes_nuvem,
-            estilizar_func=estilizar_tabela,
-            to_float_func=to_float_br,
-        )
-    with tab5:
         inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)
 else:
     st.info("💡 Carregue os dados para começar.")

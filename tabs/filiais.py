@@ -40,37 +40,76 @@ def render(df, estilizar_func, excel_func, titulo="Outras Filiais", excel_nome="
         }
     )
 
-    # ── Linha selecionada → busca movimentos do produto ───────────────────
+    # ── Linha selecionada → exibe movimentações inline ────────────────────
     linhas_sel = evento.selection.get("rows", []) if evento and hasattr(evento, "selection") else []
-    if linhas_sel:
-        row     = df.iloc[linhas_sel[0]]
-        produto = str(row.get("Produto", "")).strip().zfill(6)
+    if not linhas_sel:
+        return
 
+    row     = df.iloc[linhas_sel[0]]
+    produto = str(row.get("Produto", "")).strip().zfill(6)
+
+    # Recupera dependências injetadas pelo app.py
+    engine   = st.session_state.get("_engine")
+    buscar   = st.session_state.get("_buscar_func")
+    buscar_doc = st.session_state.get("_buscar_doc_func")
+    estilizar  = st.session_state.get("_estilizar_func")
+    tratar     = st.session_state.get("_tratar_df")
+    to_float   = st.session_state.get("_to_float_func")
+
+    if not all([engine, buscar, buscar_doc, estilizar, tratar, to_float]):
+        st.warning("Dependências não carregadas. Recarregue a página.")
+        return
+
+    with st.spinner("Buscando movimentações..."):
+        try:
+            df_mov = buscar(engine, produto)
+        except Exception as e:
+            st.error(f"Erro ao buscar movimentações: {e}")
+            return
+
+    if df_mov.empty:
+        st.info(f"Nenhuma movimentação encontrada para o produto `{produto}`.")
+        return
+
+    df_mov_trat = tratar(df_mov, to_float, deduplicar=True)
+
+    # Pega o documento da última movimentação
+    doc = ""
+    if "Documento" in df_mov_trat.columns:
+        doc = str(df_mov_trat["Documento"].iloc[0]).strip()
+
+    # Duas seções lado a lado: resumo do produto + botão buscar nota
+    col_mov, col_nota = st.columns([3, 2])
+
+    with col_mov:
         st.markdown(f"#### 🕒 Movimentações — Produto `{produto}`")
-        st.caption("Última entrada e saída por filial para o produto selecionado.")
+        st.caption("Última entrada e saída por filial.")
+        st.dataframe(estilizar(df_mov_trat), use_container_width=True, hide_index=True)
 
-        # Recupera dependências injetadas pelo app.py
-        engine    = st.session_state.get("_engine")
-        buscar    = st.session_state.get("_buscar_func")
-        estilizar = st.session_state.get("_estilizar_func")
-        tratar    = st.session_state.get("_tratar_df")
-        to_float  = st.session_state.get("_to_float_func")
+    with col_nota:
+        st.markdown(f"#### 📄 Nota Fiscal")
+        if doc and doc not in ("", "nan", "000000000"):
+            st.caption(f"Documento: **{doc}**")
+            if st.button(f"🔎 Ver todas as linhas da Nota {doc}", key=f"btn_nota_{excel_nome}", use_container_width=True):
+                st.session_state[f"nota_aberta_{excel_nome}"] = doc
 
-        if engine and buscar and estilizar and tratar and to_float:
-            with st.spinner("Buscando..."):
-                try:
-                    df_mov = buscar(engine, produto)
-                    if not df_mov.empty:
-                        df_mov_trat = tratar(df_mov, to_float, deduplicar=True)
-                        st.dataframe(estilizar(df_mov_trat), use_container_width=True, hide_index=True)
-                    else:
-                        st.info("Nenhuma movimentação encontrada para este produto.")
-                except Exception as e:
-                    st.warning(f"Erro ao carregar movimentações: {e}")
-        else:
-            st.warning("Dependências não carregadas. Recarregue a página.")
+    # Exibe todas as linhas da nota se solicitado
+    nota_aberta = st.session_state.get(f"nota_aberta_{excel_nome}", "")
+    if nota_aberta:
+        st.markdown(f"---")
+        st.markdown(f"#### 📋 Movimentações — Nota `{nota_aberta}`")
+        with st.spinner("Buscando nota..."):
+            try:
+                df_nota = buscar_doc(engine, nota_aberta)
+                if not df_nota.empty:
+                    df_nota_trat = tratar(df_nota, to_float, deduplicar=False)
+                    st.caption(f"{len(df_nota_trat)} linha(s) encontrada(s) nesta nota.")
+                    st.dataframe(estilizar(df_nota_trat), use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"Nenhuma linha encontrada para a nota `{nota_aberta}`.")
+            except Exception as e:
+                st.error(f"Erro ao buscar nota: {e}")
 
-        # Botão para navegar para a aba Movimentações
-        if st.button("🔎 Ver todas na aba Movimentações", key=f"btn_nav_{excel_nome}", use_container_width=False):
-            st.session_state["f_code_global"] = produto
+        if st.button("✖ Fechar nota", key=f"btn_fechar_{excel_nome}"):
+            st.session_state[f"nota_aberta_{excel_nome}"] = ""
             st.rerun()
