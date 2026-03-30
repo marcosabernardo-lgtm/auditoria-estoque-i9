@@ -215,12 +215,7 @@ def cruzar_wms_erp(arquivo_wms, arquivo_erp):
         raise ValueError("ERP sem dados válidos. Verifique o arquivo.")
 
     chaves = [c for c in ["Filial", "Produto", "Armazem"]
-              if c in df_wms.columns and c in df_erp.columns]
-
-    cols_erp_merge = chaves + [c for c in ["Saldo ERP", "Vl Unit", "Vl Total ERP"]
-                                if c in df_erp.columns]
-    if "Descrição" not in df_wms.columns and "Descrição" in df_erp.columns:
-        cols_erp_merge.append("Descrição")
+              if c in df_erp.columns and c in df_wms.columns]
 
     # Normaliza acentos nas chaves de ambos os lados antes do merge
     import unicodedata as _udm
@@ -228,25 +223,28 @@ def cruzar_wms_erp(arquivo_wms, arquivo_erp):
         return "".join(c for c in _udm.normalize("NFD", str(s)) if _udm.category(c) != "Mn")
 
     for col in chaves:
-        if col in df_wms.columns:
-            df_wms[col] = df_wms[col].astype(str).apply(_norm)
-        if col in df_erp.columns:
-            df_erp[col] = df_erp[col].astype(str).apply(_norm)
+        df_erp[col] = df_erp[col].astype(str).apply(_norm)
+        df_wms[col] = df_wms[col].astype(str).apply(_norm)
 
-    df = df_wms.merge(df_erp[cols_erp_merge], on=chaves, how="left")
+    # Colunas do WMS que entram no merge (localização + saldo por local)
+    cols_wms_merge = chaves + [c for c in ["Localização", "Saldo WMS"]
+                                if c in df_wms.columns]
 
-    if "Vl Unit_x" in df.columns:
-        df["Vl Unit"] = df["Vl Unit_x"].fillna(df.get("Vl Unit_y", 0))
-        df = df.drop(columns=["Vl Unit_x", "Vl Unit_y"], errors="ignore")
+    # ERP é a base — left join com WMS
+    # Produtos no ERP sem WMS → Saldo WMS = 0 (divergente)
+    df = df_erp.merge(df_wms[cols_wms_merge], on=chaves, how="left")
 
-    df["Saldo ERP"] = pd.to_numeric(df.get("Saldo ERP", 0), errors="coerce").fillna(0)
+    df["Saldo WMS"] = pd.to_numeric(df.get("Saldo WMS", 0), errors="coerce").fillna(0)
     df["Vl Unit"]   = pd.to_numeric(df.get("Vl Unit",   0), errors="coerce").fillna(0)
 
+    # Agrupamento: Total_WMS por Filial+Produto+Armazem, Qtd_Locais = nº de localizações WMS
     grp = df.groupby(chaves, as_index=False).agg(
         Total_WMS  =("Saldo WMS", "sum"),
-        Total_ERP  =("Saldo ERP", "max"),
-        Qtd_Locais =("Saldo WMS", "count"),
+        Total_ERP  =("Saldo ERP", "max"),  # ERP repete o mesmo valor em todas as linhas do grupo
+        Qtd_Locais =("Saldo WMS", lambda x: (x > 0).sum()),  # só conta locais com saldo
     )
+    # Qtd_Locais mínimo 1 para evitar divisão por zero
+    grp["Qtd_Locais"] = grp["Qtd_Locais"].clip(lower=1)
     df = df.merge(grp, on=chaves, how="left")
 
     df["Status"] = np.where(
