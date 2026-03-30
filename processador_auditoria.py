@@ -68,17 +68,27 @@ def _limpar_cod(serie, digitos=2):
     )
 
 
-def _extrair_armazem(serie):
+def _extrair_armazem(serie, empresa=None):
     """
     Extrai armazém da Localização WMS.
-    Padrão: 'A01.C01.P01.N01' → '01'
+    Padrão geral: 'A01.xxx' → '01', 'A02.xxx' → '02'
+    Exceção Tools: 'A02.xxx' → '20'
     """
-    return (
+    codigos = (
         serie.astype(str)
         .str.extract(r"^A(\d+)", expand=False)
         .str.zfill(2)
         .fillna("01")
     )
+    if empresa is not None:
+        # Normaliza para comparação sem acento
+        import unicodedata as _ud
+        def _norm(s): return "".join(c for c in _ud.normalize("NFD",str(s)) if _ud.category(c)!="Mn")
+        emp_norm = _norm(empresa).lower()
+        if "tools" in emp_norm:
+            prefix = serie.astype(str).str.extract(r"^A(\d+)", expand=False).str.zfill(2).fillna("01")
+            codigos = prefix.apply(lambda x: "20" if x == "02" else x)
+    return codigos
 
 
 def _ler_wms(arquivo):
@@ -124,7 +134,11 @@ def _ler_wms(arquivo):
         if nome in df.columns:
             if nome != "Localização":
                 df = df.rename(columns={nome: "Localização"})
-            df["Armazem"] = _extrair_armazem(df["Localização"])
+            # Extrai empresa do Filial_Raw para aplicar regra de armazém correta
+            empresa_wms = ""
+            if "Filial_Raw" in df.columns:
+                empresa_wms = df["Filial_Raw"].astype(str).str.split("-", n=1).str[1].str.strip().str.split(" - ").str[0].str.strip().iloc[0] if len(df) > 0 else ""
+            df["Armazem"] = _extrair_armazem(df["Localização"], empresa=empresa_wms)
             break
 
     if "Filial_Raw" in df.columns:
