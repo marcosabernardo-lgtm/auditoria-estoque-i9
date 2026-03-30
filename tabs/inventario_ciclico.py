@@ -562,10 +562,18 @@ def render(df_jlle, df_outras, formatar_br):
         st.error(f"❌ Erro ao conectar ao banco: {_db_err}")
         contados, ciclos, ciclo_ativo = {}, [], None
 
-    # DEBUG temporário
-    engine_ok = st.session_state.get("_engine") is not None
-    if not engine_ok:
-        st.warning("⚠️ Engine não encontrada no session_state — banco não conectado.")
+    # DEBUG temporário — testa gravação direta
+    engine_debug = st.session_state.get("_engine")
+    if engine_debug is None:
+        st.warning("⚠️ Engine não encontrada no session_state.")
+    else:
+        try:
+            from sqlalchemy import text as _text
+            with engine_debug.connect() as _conn:
+                _conn.execute(_text("SELECT 1 FROM inventario_ciclos LIMIT 1"))
+            st.success("✅ Conexão com banco OK — tabela inventario_ciclos acessível.")
+        except Exception as _e:
+            st.error(f"❌ Erro ao acessar tabela: {_e}")
 
     df_score   = calcular_score(df_filial, contados)
     total_skus = len(df_score)

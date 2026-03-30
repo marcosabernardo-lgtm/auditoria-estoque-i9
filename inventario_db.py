@@ -13,10 +13,15 @@ logger = logging.getLogger(__name__)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _engine():
-    """Retorna a engine do banco via session_state (injetada pelo app.py)."""
-    import streamlit as st
-    return st.session_state.get("_engine")
+def _get_engine(engine=None):
+    """Retorna a engine passada ou busca do session_state."""
+    if engine is not None:
+        return engine
+    try:
+        import streamlit as st
+        return st.session_state.get("_engine")
+    except Exception:
+        return None
 
 
 # ── Contados ──────────────────────────────────────────────────────────────────
@@ -25,7 +30,7 @@ def db_obter_contados(empresa: str, filial: str) -> dict:
     """
     Retorna dict {produto: data_contagem} da unidade.
     """
-    engine = _engine()
+    engine = _get_engine()
     if engine is None:
         return {}
     try:
@@ -47,7 +52,7 @@ def db_marcar_contados(empresa: str, filial: str, produtos: list,
     """
     Registra produtos como contados (upsert — atualiza se já existir).
     """
-    engine = _engine()
+    engine = _get_engine()
     if engine is None or not produtos:
         return
     data_reg = data or date.today().isoformat()
@@ -69,7 +74,7 @@ def db_marcar_contados(empresa: str, filial: str, produtos: list,
 
 def db_resetar_contados(empresa: str, filial: str):
     """Remove todos os registros de contagem da unidade (novo período)."""
-    engine = _engine()
+    engine = _get_engine()
     if engine is None:
         return
     try:
@@ -84,7 +89,7 @@ def db_resetar_contados(empresa: str, filial: str):
 
 def db_obter_ciclos(empresa: str, filial: str) -> list:
     """Retorna lista de ciclos fechados da unidade, ordenados por data."""
-    engine = _engine()
+    engine = _get_engine()
     if engine is None:
         return []
     try:
@@ -116,7 +121,7 @@ def db_obter_ciclos(empresa: str, filial: str) -> list:
 
 def db_gravar_ciclo(empresa: str, filial: str, ciclo: dict):
     """Grava um ciclo fechado no histórico."""
-    engine = _engine()
+    engine = _get_engine()
     if engine is None:
         return
     try:
@@ -152,7 +157,7 @@ def db_gravar_ciclo(empresa: str, filial: str, ciclo: dict):
 
 def db_resetar_ciclos(empresa: str, filial: str):
     """Remove todos os ciclos da unidade (novo período)."""
-    engine = _engine()
+    engine = _get_engine()
     if engine is None:
         return
     try:
@@ -167,7 +172,7 @@ def db_resetar_ciclos(empresa: str, filial: str):
 
 def db_obter_ciclo_ativo(empresa: str, filial: str) -> dict | None:
     """Retorna o ciclo ativo da unidade ou None."""
-    engine = _engine()
+    engine = _get_engine()
     if engine is None:
         return None
     try:
@@ -197,7 +202,7 @@ def db_obter_ciclo_ativo(empresa: str, filial: str) -> dict | None:
 
 def db_salvar_ciclo_ativo(empresa: str, filial: str, ciclo: dict):
     """Cria ou atualiza o ciclo ativo (upsert)."""
-    engine = _engine()
+    engine = _get_engine()
     if engine is None:
         return
     try:
@@ -246,7 +251,7 @@ def db_acumular_upload(empresa: str, filial: str, upload_info: dict):
 
 def db_fechar_ciclo_ativo(empresa: str, filial: str):
     """Remove o ciclo ativo após fechamento."""
-    engine = _engine()
+    engine = _get_engine()
     if engine is None:
         return
     try:
