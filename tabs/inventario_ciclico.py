@@ -4,6 +4,24 @@ import numpy as np
 import io
 from datetime import date, datetime
 
+# ── Gerador de relatório PDF KPMG ─────────────────────────────────────────────
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
+                                     TableStyle, PageBreak, HRFlowable)
+    from reportlab.platypus import Image as RLImage
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    PDF_DISPONIVEL = True
+except ImportError:
+    PDF_DISPONIVEL = False
+
 PERIODO_KPMG_DIAS = 365
 
 # ── Helpers de chave ──────────────────────────────────────────────────────────
@@ -279,6 +297,261 @@ def gerar_xlsx_historico(ciclos, label):
                  wb.add_format({"italic":True,"font_color":"#666666"}))
     out.seek(0); return out.getvalue()
 
+
+
+
+def gerar_relatorio_kpmg_pdf(ciclos: list, label_unidade: str,
+                              total_skus: int, contados_global: dict) -> bytes:
+    """
+    Gera o relatório PDF formal para entrega à KPMG.
+
+    Seções:
+      1. Capa
+      2. Resumo executivo (KPIs)
+      3. Gráfico de cobertura
+      4. Gráfico de acuracidade
+      5. Lista de ciclos
+      6. Detalhe de cada ciclo
+    """
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=2*cm, rightMargin=2*cm,
+        topMargin=1.5*cm, bottomMargin=1.5*cm,
+        title=f"Relatório KPMG — {label_unidade}",
+        author="Sistema de Gestão I9",
+    )
+    st    = _estilos()
+    story = []
+    W     = A4[0] - 4*cm  # largura útil
+
+    # ── CAPA ─────────────────────────────────────────────────────────────────
+    # Faixa de cabeçalho colorida
+    story.append(Table(
+        [[Paragraph("Gestão Integrada I9", st["titulo"]),
+          Paragraph(f"Relatório de<br/>Inventário Cíclico", st["subtitulo"])]],
+        colWidths=[W*0.6, W*0.4],
+        style=TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), AZUL),
+            ("TOPPADDING",    (0,0), (-1,-1), 14),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 14),
+            ("LEFTPADDING",   (0,0), (0,-1),  16),
+            ("RIGHTPADDING",  (-1,0),(-1,-1), 16),
+            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN",         (1,0), (1,-1),  "RIGHT"),
+        ])
+    ))
+    story.append(Spacer(1, 0.3*cm))
+
+    # Linha de identificação
+    periodo_ini = ciclos[0].get("data", "—") if ciclos else "—"
+    periodo_fim = ciclos[-1].get("data", "—") if ciclos else "—"
+    info_rows = [
+        ["Unidade:",   label_unidade],
+        ["Período:",   f"{periodo_ini} a {periodo_fim}"],
+        ["Gerado em:", date.today().strftime("%d/%m/%Y")],
+        ["Ciclos:",    str(len(ciclos))],
+    ]
+    story.append(Table(
+        info_rows,
+        colWidths=[3*cm, W-3*cm],
+        style=TableStyle([
+            ("FONTNAME",  (0,0), (0,-1), "Helvetica-Bold"),
+            ("FONTNAME",  (1,0), (1,-1), "Helvetica"),
+            ("FONTSIZE",  (0,0), (-1,-1), 9),
+            ("TEXTCOLOR", (0,0), (0,-1), AZUL),
+            ("TEXTCOLOR", (1,0), (1,-1), TEXTO),
+            ("TOPPADDING",    (0,0), (-1,-1), 3),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+            ("LINEBELOW", (0,-1), (-1,-1), 0.5, colors.HexColor("#cccccc")),
+        ])
+    ))
+    story.append(Spacer(1, 0.5*cm))
+
+    # ── RESUMO EXECUTIVO ─────────────────────────────────────────────────────
+    story.append(Paragraph("Resumo Executivo", st["h1"]))
+    story.append(HRFlowable(width=W, thickness=2, color=LARANJA, spaceAfter=8))
+
+    total_contados  = len(contados_global)
+    pct_cobertura   = (total_contados / total_skus * 100) if total_skus > 0 else 0
+    acuracidades    = []
+    for c in ciclos:
+        ac = str(c.get("acuracidade","0")).replace(",",".").replace("%","").strip()
+        try: acuracidades.append(float(ac))
+        except: pass
+    media_acuracidade = sum(acuracidades)/len(acuracidades) if acuracidades else 0
+
+    kpis = [
+        (f"{total_skus:,}",           "Total de SKUs"),
+        (f"{total_contados:,}",        "SKUs Contados"),
+        (f"{pct_cobertura:.1f}%",      "Cobertura KPMG"),
+        (f"{media_acuracidade:.1f}%",  "Acuracidade Média"),
+        (f"{len(ciclos)}",             "Ciclos Realizados"),
+    ]
+    kpi_data = [[Paragraph(v, st["kpi_val"]) for v, _ in kpis],
+                [Paragraph(l, st["kpi_lbl"]) for _, l in kpis]]
+    story.append(Table(
+        kpi_data,
+        colWidths=[W/5]*5,
+        style=TableStyle([
+            ("BACKGROUND",    (0,0), (-1,-1), CINZA),
+            ("BOX",           (0,0), (-1,-1), 0.5, colors.HexColor("#dddddd")),
+            ("LINEABOVE",     (0,0), (-1,0),  3, LARANJA),
+            ("TOPPADDING",    (0,0), (-1,-1), 10),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+            ("ALIGN",         (0,0), (-1,-1), "CENTER"),
+        ])
+    ))
+    story.append(Spacer(1, 0.5*cm))
+
+    # Texto resumo
+    status_cob = "✓ CUMPRIDA" if pct_cobertura >= 100 else f"EM ANDAMENTO ({pct_cobertura:.1f}%)"
+    story.append(Paragraph(
+        f"A unidade <b>{label_unidade}</b> realizou <b>{len(ciclos)} ciclo(s)</b> de inventário "
+        f"no período de <b>{periodo_ini}</b> a <b>{periodo_fim}</b>. "
+        f"A cobertura acumulada atingiu <b>{pct_cobertura:.1f}%</b> dos {total_skus:,} SKUs cadastrados, "
+        f"com acuracidade média de <b>{media_acuracidade:.1f}%</b>. "
+        f"Exigência KPMG de cobertura anual: <b>{status_cob}</b>.",
+        st["body"]
+    ))
+
+    # ── GRÁFICO COBERTURA ────────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("Evolução da Cobertura", st["h1"]))
+    story.append(HRFlowable(width=W, thickness=2, color=LARANJA, spaceAfter=8))
+    story.append(Paragraph(
+        "Percentual de SKUs contados por ciclo em relação ao total da unidade. "
+        "A linha verde tracejada representa a meta de 100% exigida pela KPMG.",
+        st["body"]
+    ))
+    buf_cob = _grafico_cobertura(ciclos)
+    if buf_cob:
+        story.append(RLImage(buf_cob, width=W, height=5*cm))
+    story.append(Spacer(1, 0.5*cm))
+
+    # ── GRÁFICO ACURACIDADE ──────────────────────────────────────────────────
+    story.append(Paragraph("Acuracidade por Ciclo", st["h1"]))
+    story.append(HRFlowable(width=W, thickness=2, color=LARANJA, spaceAfter=8))
+    story.append(Paragraph(
+        "Acuracidade registrada pelo WMS em cada ciclo de contagem. "
+        "Verde: ≥ 95% · Laranja: 80–95% · Vermelho: < 80%.",
+        st["body"]
+    ))
+    buf_ac = _grafico_acuracidade(ciclos)
+    if buf_ac:
+        story.append(RLImage(buf_ac, width=W, height=4.5*cm))
+
+    # ── LISTA DE CICLOS ──────────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("Lista de Ciclos Realizados", st["h1"]))
+    story.append(HRFlowable(width=W, thickness=2, color=LARANJA, spaceAfter=8))
+
+    header = ["#", "Nº Ciclo", "Data Contagem", "Responsável", "Nº Inv.", "SKUs", "Cobertura", "Acuracidade"]
+    rows   = [header]
+    for i, c in enumerate(ciclos, 1):
+        rows.append([
+            str(i),
+            c.get("num_ciclo","—"),
+            c.get("data","—"),
+            c.get("responsavel","—"),
+            c.get("num_inv","—"),
+            str(len(c.get("produtos_contados",[]))),
+            f"{c.get('cobertura_pct',0):.1f}%",
+            c.get("acuracidade","—"),
+        ])
+
+    col_w = [0.6*cm, 4.5*cm, 2.5*cm, 3.5*cm, 1.5*cm, 1.2*cm, 2*cm, 2*cm]
+    t_style = TableStyle([
+        ("BACKGROUND",    (0,0), (-1,0),  AZUL),
+        ("TEXTCOLOR",     (0,0), (-1,0),  BRANCO),
+        ("FONTNAME",      (0,0), (-1,0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0,0), (-1,-1), 8),
+        ("ALIGN",         (0,0), (-1,-1), "CENTER"),
+        ("ALIGN",         (3,1), (3,-1),  "LEFT"),
+        ("ROWBACKGROUNDS",(0,1), (-1,-1), [BRANCO, CINZA]),
+        ("GRID",          (0,0), (-1,-1), 0.3, colors.HexColor("#cccccc")),
+        ("TOPPADDING",    (0,0), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LINEBELOW",     (0,0), (-1,0),  1.5, LARANJA),
+    ])
+    story.append(Table(rows, colWidths=col_w, style=t_style, repeatRows=1))
+
+    # ── DETALHE DE CADA CICLO ────────────────────────────────────────────────
+    for i, c in enumerate(ciclos, 1):
+        story.append(PageBreak())
+        story.append(Paragraph(f"Ciclo {i} — {c.get('num_ciclo','—')}", st["h1"]))
+        story.append(HRFlowable(width=W, thickness=2, color=LARANJA, spaceAfter=6))
+
+        # Info do ciclo
+        det = [
+            ["Data da contagem:",  c.get("data","—"),
+             "Nº Inventário:",     c.get("num_inv","—")],
+            ["Responsável:",       c.get("responsavel","—"),
+             "Acuracidade:",       c.get("acuracidade","—")],
+            ["SKUs na lista:",     str(c.get("qtd_lista",0)),
+             "SKUs contados:",     str(len(c.get("produtos_contados",[])))],
+            ["Cobertura:",         f"{c.get('cobertura_pct',0):.1f}%",
+             "Status:",            c.get("status","—")],
+        ]
+        story.append(Table(
+            det, colWidths=[3*cm, 5*cm, 3*cm, W-11*cm],
+            style=TableStyle([
+                ("FONTNAME",  (0,0), (0,-1), "Helvetica-Bold"),
+                ("FONTNAME",  (2,0), (2,-1), "Helvetica-Bold"),
+                ("FONTSIZE",  (0,0), (-1,-1), 8),
+                ("TEXTCOLOR", (0,0), (0,-1), AZUL),
+                ("TEXTCOLOR", (2,0), (2,-1), AZUL),
+                ("BACKGROUND",(0,0), (-1,-1), CINZA),
+                ("GRID",      (0,0), (-1,-1), 0.3, colors.HexColor("#dddddd")),
+                ("TOPPADDING",(0,0), (-1,-1), 4),
+                ("BOTTOMPADDING",(0,0),(-1,-1),4),
+            ])
+        ))
+        story.append(Spacer(1, 0.3*cm))
+
+        # Produtos contados
+        prods = c.get("produtos_contados", [])
+        if prods:
+            story.append(Paragraph(f"Produtos contados ({len(prods)})", st["h2"]))
+            # Divide em 4 colunas
+            cols_n = 4
+            prod_rows = [["Código"]*cols_n]
+            for j in range(0, len(prods), cols_n):
+                row = prods[j:j+cols_n]
+                while len(row) < cols_n:
+                    row.append("")
+                prod_rows.append(row)
+
+            story.append(Table(
+                prod_rows,
+                colWidths=[W/cols_n]*cols_n,
+                style=TableStyle([
+                    ("BACKGROUND",    (0,0), (-1,0),  AZUL2),
+                    ("TEXTCOLOR",     (0,0), (-1,0),  BRANCO),
+                    ("FONTNAME",      (0,0), (-1,0),  "Helvetica-Bold"),
+                    ("FONTSIZE",      (0,0), (-1,-1), 8),
+                    ("ALIGN",         (0,0), (-1,-1), "CENTER"),
+                    ("ROWBACKGROUNDS",(0,1), (-1,-1), [BRANCO, CINZA]),
+                    ("GRID",          (0,0), (-1,-1), 0.3, colors.HexColor("#cccccc")),
+                    ("TOPPADDING",    (0,0), (-1,-1), 3),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+                ]),
+                repeatRows=1
+            ))
+
+    # ── RODAPÉ FINAL ─────────────────────────────────────────────────────────
+    story.append(Spacer(1, 1*cm))
+    story.append(HRFlowable(width=W, thickness=0.5, color=colors.HexColor("#cccccc")))
+    story.append(Paragraph(
+        f"Documento gerado pelo Sistema de Gestão Integrada I9 em {date.today().strftime('%d/%m/%Y')}. "
+        f"Este relatório é destinado à auditoria KPMG e representa o inventário cíclico realizado "
+        f"na unidade {label_unidade}.",
+        st["footer"]
+    ))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
 
 # ── Render ────────────────────────────────────────────────────────────────────
 
@@ -577,15 +850,29 @@ def render(df_jlle, df_outras, formatar_br):
             } for c in ciclos])
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
-            col_dl, col_reset = st.columns([3,1])
+            col_dl, col_pdf, col_reset = st.columns([2, 2, 1])
             with col_dl:
                 st.download_button(
-                    "📥 Exportar Histórico KPMG",
+                    "📥 Exportar Histórico (Excel)",
                     data=gerar_xlsx_historico(ciclos, label),
                     file_name=f"historico_kpmg_{_slug(empresa_sel,filial_sel)}_{date.today().strftime('%d%m%Y')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            with col_pdf:
+                if PDF_DISPONIVEL:
+                    pdf_bytes = gerar_relatorio_kpmg_pdf(
+                        ciclos, label, total_skus, contados
+                    )
+                    st.download_button(
+                        "📄 Relatório KPMG (PDF)",
+                        data=pdf_bytes,
+                        file_name=f"relatorio_kpmg_{_slug(empresa_sel,filial_sel)}_{date.today().strftime('%d%m%Y')}.pdf",
+                        mime="application/pdf",
+                        type="primary",
+                    )
+                else:
+                    st.caption("PDF indisponível — instale reportlab e matplotlib")
             with col_reset:
-                if st.button("🔄 Novo período anual", key="ic_reset"):
+                if st.button("🔄 Novo período", key="ic_reset"):
                     resetar(empresa_sel, filial_sel)
                     st.success("Novo período iniciado!")
                     st.rerun()
