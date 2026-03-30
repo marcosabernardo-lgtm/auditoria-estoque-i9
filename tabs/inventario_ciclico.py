@@ -541,8 +541,13 @@ def render(df_jlle, df_outras, formatar_br):
     if pct_ciclo >= 100:
         if st.button("🏁 Fechar inventário", key="ic_fechar", type="primary"):
             fechar_ciclo(empresa_sel, filial_sel)
-            st.success("Inventário fechado e registrado no histórico KPMG!")
+            st.session_state["ic_fechado_msg"] = True
             st.rerun()
+
+    # Mensagem de sucesso após fechar (persiste um ciclo de rerun)
+    if st.session_state.pop("ic_fechado_msg", False):
+        st.success("✅ Inventário fechado e registrado no histórico KPMG!")
+        st.balloons()
     else:
         col_btn, col_msg = st.columns([1,3])
         with col_btn:
