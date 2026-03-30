@@ -5,7 +5,7 @@ import logging
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# ── Mapeamento de filiais (igual ao Power Query / get_df_empresas) ─────────────
+# ── Mapeamento empresa+cod → nome completo (igual ao processador_movs) ────────
 MAPA_FILIAIS = {
     "Tools 00":     "Tools - Matriz",
     "Tools 01":     "Tools - Filial",
@@ -21,76 +21,118 @@ MAPA_FILIAIS = {
 }
 
 
-def _limpar_codigo(serie: pd.Series, zfill: int) -> pd.Series:
+def _limpar_produto(serie):
     return (
         serie.astype(str)
         .str.replace(r"\.0$", "", regex=True)
         .str.strip()
-        .str.zfill(zfill)
+        .str.zfill(6)
     )
 
 
-def _ler_wms(arquivo) -> pd.DataFrame:
+def _limpar_cod(serie, digitos=2):
+    return (
+        serie.astype(str)
+        .str.replace(r"\.0$", "", regex=True)
+        .str.strip()
+        .str.zfill(digitos)
+    )
+
+
+def _extrair_armazem(serie):
     """
-    Lê o Excel do WMS.
-    Espera colunas: Empresa, Filial, Produto, Armazem, Localização, Descrição,
-                    Saldo Atual (por localização), C Unitario
+    Extrai armazém da Localização WMS.
+    Padrão: 'A01.C01.P01.N01' → '01'
+    """
+    return (
+        serie.astype(str)
+        .str.extract(r"^A(\d+)", expand=False)
+        .str.zfill(2)
+        .fillna("01")
+    )
+
+
+def _ler_wms(arquivo):
+    """
+    Lê Excel do WMS.
+    Colunas esperadas: Empresa\Filial | Localização | Produto | Descrição |
+                       Capacidade | Utilizado | Disponível
+    - Saldo WMS = Disponível
+    - Armazem   = extraído da Localização (A01... → 01)
+    - Filial    = nome após primeiro traço de 'Empresa\Filial'
+                  ex: '01-Tools - Filial' → 'Tools - Filial'
     """
     df = pd.read_excel(arquivo)
     df.columns = df.columns.str.strip()
 
-    # Renomeia variações comuns de nome
-    renomes = {
-        "C Unitario": "Vl Unit",
-        "C_Unitario": "Vl Unit",
-        "Vlr.Final":  "Vl Total WMS",
-        "Saldo Atual": "Saldo WMS",
-    }
-    df = df.rename(columns={k: v for k, v in renomes.items() if k in df.columns})
+    # Renomeia coluna combinada empresa/filial
+    for col in list(df.columns):
+        if "Empresa" in col and "Filial" in col:
+            df = df.rename(columns={col: "Filial_Raw"})
+            break
 
-    # Garante numéricos
-    for col in ["Saldo WMS", "Vl Unit", "Vl Total WMS"]:
+    # Saldo WMS
+    for nome in ["Disponível", "Disponivel"]:
+        if nome in df.columns:
+            df = df.rename(columns={nome: "Saldo WMS"})
+            break
+
+    for col in ["Saldo WMS", "Capacidade", "Utilizado"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Filtra saldo > 0
-    if "Saldo WMS" in df.columns:
-        df = df[df["Saldo WMS"] > 0].copy()
+    df = df[df["Saldo WMS"] > 0].copy()
+    if df.empty:
+        return pd.DataFrame()
 
-    # Normaliza códigos
     if "Produto" in df.columns:
-        df["Produto"] = _limpar_codigo(df["Produto"], 6)
-    if "Filial" in df.columns:
-        df["Filial"] = _limpar_codigo(df["Filial"], 2)
-    if "Armazem" in df.columns:
-        df["Armazem"] = _limpar_codigo(df["Armazem"], 2)
+        df["Produto"] = _limpar_produto(df["Produto"])
 
-    # Resolve nome da filial via mapeamento
-    if "Empresa" in df.columns and "Filial" in df.columns:
-        chave = df["Empresa"].astype(str).str.strip() + " " + df["Filial"].astype(str).str.strip()
-        df["Filial"] = chave.map(MAPA_FILIAIS).fillna(chave)
-        df = df.drop(columns=["Empresa"], errors="ignore")
+    for nome in ["Localização", "Localizacao"]:
+        if nome in df.columns:
+            if nome != "Localização":
+                df = df.rename(columns={nome: "Localização"})
+            df["Armazem"] = _extrair_armazem(df["Localização"])
+            break
 
-    # Remove duplicatas de chave (Filial + Produto + Armazem + Localização)
+    if "Filial_Raw" in df.columns:
+        # '01-Tools - Filial' → 'Tools - Filial'
+        df["Filial"] = df["Filial_Raw"].astype(str).str.split("-", n=1).str[1].str.strip()
+        df = df.drop(columns=["Filial_Raw"])
+
+    df["Empresa"] = df["Filial"].str.split(" - ").str[0].str.strip()
+
     subset = [c for c in ["Filial", "Produto", "Armazem", "Localização"] if c in df.columns]
     df = df.drop_duplicates(subset=subset)
-
     return df
 
 
-def _ler_erp(arquivo) -> pd.DataFrame:
+def _ler_erp(arquivo):
     """
-    Lê o Excel do ERP.
-    Espera colunas: Empresa, Filial, Produto, Armazem, Descrição, Saldo Atual, C Unitario
-    O ERP traz UMA linha por produto (saldo total, sem localização).
+    Lê Excel do ERP.
+    Estrutura: 3 abas (Tools, Service, Maquinas) — nome da aba = empresa
+    Colunas: Filial | Produto | Armazem | Descrição | Saldo Atual | C Unitario | Vlr.Final
+    - Filial = código numérico ('01', '02'...) → resolvido pelo MAPA_FILIAIS
     """
-    df = pd.read_excel(arquivo)
-    df.columns = df.columns.str.strip()
+    xls = pd.ExcelFile(arquivo)
+    abas = []
+    for sheet in xls.sheet_names:
+        df_aba = pd.read_excel(xls, sheet_name=sheet)
+        df_aba.columns = df_aba.columns.str.strip()
+        if df_aba.empty:
+            continue
+        df_aba["Empresa_Aba"] = sheet.strip()
+        abas.append(df_aba)
+
+    if not abas:
+        return pd.DataFrame()
+
+    df = pd.concat(abas, ignore_index=True)
 
     renomes = {
+        "Saldo Atual": "Saldo ERP",
         "C Unitario":  "Vl Unit",
         "C_Unitario":  "Vl Unit",
-        "Saldo Atual": "Saldo ERP",
         "Vlr.Final":   "Vl Total ERP",
     }
     df = df.rename(columns={k: v for k, v in renomes.items() if k in df.columns})
@@ -99,128 +141,107 @@ def _ler_erp(arquivo) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
+    df = df[df["Saldo ERP"] > 0].copy()
+
     if "Produto" in df.columns:
-        df["Produto"] = _limpar_codigo(df["Produto"], 6)
+        df["Produto"] = _limpar_produto(df["Produto"])
     if "Filial" in df.columns:
-        df["Filial"] = _limpar_codigo(df["Filial"], 2)
+        df["Filial_Cod"] = _limpar_cod(df["Filial"], 2)
     if "Armazem" in df.columns:
-        df["Armazem"] = _limpar_codigo(df["Armazem"], 2)
+        df["Armazem"] = _limpar_cod(df["Armazem"], 2)
 
-    if "Empresa" in df.columns and "Filial" in df.columns:
-        chave = df["Empresa"].astype(str).str.strip() + " " + df["Filial"].astype(str).str.strip()
-        df["Filial"] = chave.map(MAPA_FILIAIS).fillna(chave)
-        df = df.drop(columns=["Empresa"], errors="ignore")
+    df["Chave"] = df["Empresa_Aba"].str.strip() + " " + df["Filial_Cod"].str.strip()
+    df["Filial"] = df["Chave"].map(MAPA_FILIAIS).fillna(df["Chave"])
+    df["Empresa"] = df["Filial"].str.split(" - ").str[0].str.strip()
+    df = df.drop(columns=["Chave", "Filial_Cod", "Empresa_Aba"], errors="ignore")
 
-    # ERP não tem localização — remove duplicatas por Filial+Produto+Armazem
     subset = [c for c in ["Filial", "Produto", "Armazem"] if c in df.columns]
     df = df.drop_duplicates(subset=subset)
-
     return df
 
 
-def cruzar_wms_erp(arquivo_wms, arquivo_erp) -> pd.DataFrame:
+def cruzar_wms_erp(arquivo_wms, arquivo_erp):
     """
-    Replica a lógica do Power Query:
+    Cruza WMS x ERP aplicando a lógica de rateio do Power Query:
 
-    1. WMS  → N linhas por produto (uma por localização), saldo real por local
-    2. ERP  → 1 linha por produto, saldo total
+    1. WMS  → N linhas por produto (uma por localização)
+    2. ERP  → 1 linha por produto+armazem (saldo total)
     3. Join por Filial + Produto + Armazem
-    4. Agrupamento → Total_WMS, Total_ERP, Qtd_Locais
-    5. Status  : OK se Total_WMS == Total_ERP, senão Divergente
-    6. Rateado : se OK → Saldo WMS (espelho visual perfeito)
-                 se Divergente → Total_ERP / Qtd_Locais
-    7. Divergência = Saldo WMS - Saldo ERP (Rateado)
-    8. Vl Divergência = Divergência * Vl Unit
+    4. Agrupa → Total_WMS, Total_ERP, Qtd_Locais
+    5. Status      : OK se Total_WMS == Total_ERP
+    6. ERP Rateado : OK → espelha Saldo WMS | Divergente → Total_ERP / Qtd_Locais
+    7. Divergência : Saldo WMS - ERP Rateado
     """
     df_wms = _ler_wms(arquivo_wms)
     df_erp = _ler_erp(arquivo_erp)
 
     if df_wms.empty:
-        logger.warning("cruzar_wms_erp: arquivo WMS vazio ou sem dados válidos.")
-        return pd.DataFrame()
+        raise ValueError("WMS sem dados válidos. Verifique o arquivo.")
     if df_erp.empty:
-        logger.warning("cruzar_wms_erp: arquivo ERP vazio ou sem dados válidos.")
-        return pd.DataFrame()
+        raise ValueError("ERP sem dados válidos. Verifique o arquivo.")
 
-    # ── Join WMS ← ERP por Filial + Produto + Armazem ─────────────────────
-    chaves = [c for c in ["Filial", "Produto", "Armazem"] if c in df_wms.columns and c in df_erp.columns]
+    chaves = [c for c in ["Filial", "Produto", "Armazem"]
+              if c in df_wms.columns and c in df_erp.columns]
 
-    # Colunas do ERP que entram no merge (evita colisão com WMS)
-    cols_erp = chaves + [c for c in ["Saldo ERP", "Vl Unit", "Vl Total ERP", "Descrição"]
-                         if c in df_erp.columns and c not in df_wms.columns]
-    # Descrição prefere WMS; se WMS não tiver, usa ERP
-    if "Descrição" in df_wms.columns:
-        cols_erp = [c for c in cols_erp if c != "Descrição"]
+    cols_erp_merge = chaves + [c for c in ["Saldo ERP", "Vl Unit", "Vl Total ERP"]
+                                if c in df_erp.columns]
+    if "Descrição" not in df_wms.columns and "Descrição" in df_erp.columns:
+        cols_erp_merge.append("Descrição")
 
-    df = df_wms.merge(df_erp[cols_erp], on=chaves, how="left")
+    df = df_wms.merge(df_erp[cols_erp_merge], on=chaves, how="left")
 
-    # Vl Unit: prioriza ERP se não veio do WMS
     if "Vl Unit_x" in df.columns:
         df["Vl Unit"] = df["Vl Unit_x"].fillna(df.get("Vl Unit_y", 0))
         df = df.drop(columns=["Vl Unit_x", "Vl Unit_y"], errors="ignore")
 
-    # Saldo ERP nulo → 0 (produto existe no WMS mas não no ERP)
     df["Saldo ERP"] = pd.to_numeric(df.get("Saldo ERP", 0), errors="coerce").fillna(0)
+    df["Vl Unit"]   = pd.to_numeric(df.get("Vl Unit",   0), errors="coerce").fillna(0)
 
-    # ── Agrupamento por Filial + Produto + Armazem ────────────────────────
     grp = df.groupby(chaves, as_index=False).agg(
         Total_WMS  =("Saldo WMS", "sum"),
-        Total_ERP  =("Saldo ERP", "max"),   # ERP repete o total em todas as linhas
+        Total_ERP  =("Saldo ERP", "max"),
         Qtd_Locais =("Saldo WMS", "count"),
     )
-
     df = df.merge(grp, on=chaves, how="left")
 
-    # ── Status ────────────────────────────────────────────────────────────
-    df["Status"] = np.where(df["Total_WMS"] == df["Total_ERP"], "OK", "Divergente")
+    df["Status"] = np.where(
+        df["Total_WMS"].round(4) == df["Total_ERP"].round(4),
+        "OK", "Divergente"
+    )
 
-    # ── Saldo ERP (Rateado) ───────────────────────────────────────────────
-    # OK        → espelha o Saldo WMS (visual limpo: cada local mostra o que tem)
-    # Divergente → Total_ERP ÷ Qtd_Locais (rateio igual entre locais)
     df["Saldo ERP (Rateado)"] = np.where(
         df["Status"] == "OK",
         df["Saldo WMS"],
         (df["Total_ERP"] / df["Qtd_Locais"]).round(2),
     )
 
-    # ── Divergência por localização ───────────────────────────────────────
     df["Divergência"] = np.where(
         df["Status"] == "OK",
         0,
         (df["Saldo WMS"] - df["Saldo ERP (Rateado)"]).round(4),
     )
 
-    # ── Valores financeiros ───────────────────────────────────────────────
-    vl_unit = pd.to_numeric(df.get("Vl Unit", 0), errors="coerce").fillna(0)
-    df["Vl Divergência"] = (df["Divergência"] * vl_unit).round(2)
-    df["Vl Total ERP"]   = (df["Total_ERP"]   * vl_unit).round(2)
+    df["Vl Divergência"] = (df["Divergência"] * df["Vl Unit"]).round(2)
+    df["Vl Total ERP"]   = (df["Total_ERP"]   * df["Vl Unit"]).round(2)
 
-    # ── Coluna Empresa (extraída da Filial para compatibilidade com o app) ─
-    df["Empresa"] = df["Filial"].str.split(" - ").str[0]
+    df = df.rename(columns={
+        "Total_ERP":  "Saldo ERP (Total)",
+        "Qtd_Locais": "Qtd Locais",
+    })
+    df = df.drop(columns=["Total_WMS", "Saldo ERP"], errors="ignore")
 
-    # ── Organização final ─────────────────────────────────────────────────
-    colunas_finais = [
+    ordem = [
         "Status", "Empresa", "Filial", "Localização", "Armazem",
-        "Produto", "Descrição",
-        "Saldo ERP (Total)",        # = Total_ERP — saldo real do produto
-        "Saldo ERP (Rateado)",      # = rateado por localização
-        "Saldo WMS",                # = saldo físico por localização
-        "Divergência",
-        "Vl Unit",
-        "Vl Divergência",
-        "Vl Total ERP",
-        "Qtd_Locais",
+        "Produto", "Qtd Locais", "Descrição", "Vl Unit",
+        "Saldo ERP (Total)", "Saldo ERP (Rateado)", "Saldo WMS",
+        "Divergência", "Vl Divergência", "Vl Total ERP",
     ]
-
-    # Renomeia Total_ERP para o nome final
-    df = df.rename(columns={"Total_ERP": "Saldo ERP (Total)"})
-
-    # Garante só as colunas que existem
-    colunas_ok = [c for c in colunas_finais if c in df.columns]
-    df = df[colunas_ok].reset_index(drop=True)
+    colunas_ok = [c for c in ordem if c in df.columns]
+    resto = [c for c in df.columns if c not in colunas_ok]
+    df = df[colunas_ok + resto].reset_index(drop=True)
 
     logger.info(
-        "cruzar_wms_erp: %d linhas geradas (%d produtos únicos).",
-        len(df), df["Produto"].nunique()
+        "cruzar_wms_erp: %d linhas | %d produtos | %d divergentes",
+        len(df), df["Produto"].nunique(), int((df["Status"] == "Divergente").sum()),
     )
     return df
