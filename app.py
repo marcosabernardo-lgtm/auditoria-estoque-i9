@@ -187,10 +187,12 @@ if df_base is not None:
 
     # CHAMADA DAS ABAS
     # Injeta dependências para uso nas abas (evita re-query ao carregar)
-    st.session_state["_engine"]       = get_engine()
-    st.session_state["_buscar_func"]  = buscar_movimentacoes_nuvem
+    from tabs.movimentacoes import _tratar_df as _tratar_mov
+    st.session_state["_engine"]         = get_engine()
+    st.session_state["_buscar_func"]    = buscar_movimentacoes_nuvem
     st.session_state["_estilizar_func"] = estilizar_tabela
     st.session_state["_to_float_func"]  = to_float_br
+    st.session_state["_tratar_df"]      = _tratar_mov
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações", "🔄 Inv. Cíclico"])
 

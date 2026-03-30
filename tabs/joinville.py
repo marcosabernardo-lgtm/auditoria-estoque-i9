@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 
 def render(df, estilizar_func, excel_func, titulo="Unidades Joinville", excel_nome="auditoria_joinville"):
     st.subheader(f"Auditoria - {titulo}")
@@ -48,31 +47,30 @@ def render(df, estilizar_func, excel_func, titulo="Unidades Joinville", excel_no
         produto = str(row.get("Produto", "")).strip().zfill(6)
 
         st.markdown(f"#### 🕒 Movimentações — Produto `{produto}`")
+        st.caption("Última entrada e saída por filial para o produto selecionado.")
 
-        col_sel, col_btn = st.columns([3, 1])
-        with col_sel:
-            st.caption(f"Última entrada e saída por filial para o produto selecionado.")
-        with col_btn:
-            if st.button("🔎 Ver na aba Movimentações", key=f"btn_nav_{excel_nome}", use_container_width=True):
-                st.session_state["f_code_global"] = produto
-                st.session_state["nav_para_mov"]  = True
-                st.rerun()
-
-        # Busca movimentos diretamente via session_state de engine
-        engine = st.session_state.get("_engine")
-        buscar = st.session_state.get("_buscar_func")
+        # Recupera dependências injetadas pelo app.py
+        engine    = st.session_state.get("_engine")
+        buscar    = st.session_state.get("_buscar_func")
         estilizar = st.session_state.get("_estilizar_func")
+        tratar    = st.session_state.get("_tratar_df")
+        to_float  = st.session_state.get("_to_float_func")
 
-        if engine and buscar and estilizar:
-            with st.spinner("Buscando movimentações..."):
+        if engine and buscar and estilizar and tratar and to_float:
+            with st.spinner("Buscando..."):
                 try:
-                    from movimentacoes import _tratar_df
-                    to_float = st.session_state.get("_to_float_func")
                     df_mov = buscar(engine, produto)
                     if not df_mov.empty:
-                        df_mov_trat = _tratar_df(df_mov, to_float, deduplicar=True)
+                        df_mov_trat = tratar(df_mov, to_float, deduplicar=True)
                         st.dataframe(estilizar(df_mov_trat), use_container_width=True, hide_index=True)
                     else:
                         st.info("Nenhuma movimentação encontrada para este produto.")
                 except Exception as e:
-                    st.warning(f"Não foi possível carregar movimentações: {e}")
+                    st.warning(f"Erro ao carregar movimentações: {e}")
+        else:
+            st.warning("Dependências não carregadas. Recarregue a página.")
+
+        # Botão para navegar para a aba Movimentações
+        if st.button("🔎 Ver todas na aba Movimentações", key=f"btn_nav_{excel_nome}", use_container_width=False):
+            st.session_state["f_code_global"] = produto
+            st.rerun()
