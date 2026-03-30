@@ -71,8 +71,8 @@ def _ler_wms(arquivo):
             df = df.rename(columns={col: "Filial_Raw"})
             break
 
-    # Saldo WMS
-    for nome in ["Disponível", "Disponivel"]:
+    # Saldo WMS = Utilizado (quantidade física na localização)
+    for nome in ["Utilizado"]:
         if nome in df.columns:
             df = df.rename(columns={nome: "Saldo WMS"})
             break
