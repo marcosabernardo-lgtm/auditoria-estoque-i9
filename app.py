@@ -143,18 +143,21 @@ if df_base is not None:
     if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
     # Separação Joinville x Outras Filiais
+    # Classificação exata conforme tabela de referência
     lista_joinville = [
+        "Tools - Filial",
         "Maquinas - Filial",   "Máquinas - Filial",
         "Service - Matriz",
         "Service - Filial",
-        "Tools - Filial",
     ]
     lista_outras = [
+        "Tools - Matriz",
+        "Maquinas - Matriz",   "Máquinas - Matriz",
         "Maquinas - Jundiai",  "Máquinas - Jundiai",
-        "Service - Caxias",
-        "Service - Jundiai",
         "Robotica - Matriz",   "Robótica - Matriz",
         "Robotica - Jaragua",  "Robótica - Jaragua",
+        "Service - Caxias",
+        "Service - Jundiai",
     ]
     dff_jlle   = dff[ dff["Filial"].isin(lista_joinville)].copy()
     dff_outras = dff[ dff["Filial"].isin(lista_outras)].copy()
