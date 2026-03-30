@@ -6,47 +6,44 @@ from datetime import date
 
 # ── Constantes ────────────────────────────────────────────────────────────────
 
-FILIAIS_JOINVILLE = [
-    "Maquinas - Filial",
-    "Service - Matriz",
-    "Service - Filial",
-    "Tools - Filial",
-]
+# Empresas presentes no df_jlle (coluna "Empresa")
+EMPRESAS_JOINVILLE = ["Maquinas", "Service", "Tools"]
 
 PERIODO_KPMG_DIAS = 365  # Cobertura total exigida em 1 ano
 
 
 # ── Controle de cobertura (session_state) ─────────────────────────────────────
 
-def _chave_sessao(filial: str) -> str:
-    """Gera uma chave única no session_state para cada filial."""
-    return f"ic_contados_{filial.replace(' ', '_').replace('-', '')}"
+def _chave_sessao(empresa: str, filial: str) -> str:
+    """Gera uma chave única no session_state para cada combinação empresa+filial."""
+    raw = f"{empresa}_{filial}".replace(" ", "_").replace("-", "")
+    return f"ic_contados_{raw}"
 
 
-def inicializar_controle(filial: str):
-    """Cria o registro de contagem da filial se ainda não existir."""
-    chave = _chave_sessao(filial)
+def inicializar_controle(empresa: str, filial: str):
+    """Cria o registro de contagem se ainda não existir."""
+    chave = _chave_sessao(empresa, filial)
     if chave not in st.session_state:
         st.session_state[chave] = {}  # {produto: data_contagem (str)}
 
 
-def marcar_contados(filial: str, produtos: list):
-    """Registra os produtos como contados hoje para a filial informada."""
-    chave = _chave_sessao(filial)
+def marcar_contados(empresa: str, filial: str, produtos: list):
+    """Registra os produtos como contados hoje."""
+    chave = _chave_sessao(empresa, filial)
     hoje = date.today().isoformat()
     for p in produtos:
         st.session_state[chave][p] = hoje
 
 
-def obter_contados(filial: str) -> dict:
-    """Retorna dict {produto: data_contagem} da filial."""
-    chave = _chave_sessao(filial)
+def obter_contados(empresa: str, filial: str) -> dict:
+    """Retorna dict {produto: data_contagem}."""
+    chave = _chave_sessao(empresa, filial)
     return st.session_state.get(chave, {})
 
 
-def resetar_contagem(filial: str):
-    """Limpa o histórico de contagem da filial (novo período)."""
-    chave = _chave_sessao(filial)
+def resetar_contagem(empresa: str, filial: str):
+    """Limpa o histórico de contagem (novo período)."""
+    chave = _chave_sessao(empresa, filial)
     st.session_state[chave] = {}
 
 
@@ -231,58 +228,66 @@ def render(df_jlle: pd.DataFrame, df_outras: pd.DataFrame, formatar_br):
         st.warning("Nenhum dado de Joinville encontrado. Carregue os dados na sidebar.")
         return
 
-    # ── Seleção de filial ─────────────────────────────────────────────────
-    st.markdown("### 1. Selecione a filial")
-    filiais_disponiveis = sorted(
-        [f for f in FILIAIS_JOINVILLE if f in df_jlle["Filial"].dropna().unique()]
-    )
+    # ── Filtro próprio da aba (independente do filtro global) ────────────
+    st.markdown("### 1. Selecione a unidade")
+    st.caption("Este filtro é independente do filtro global e define a base do inventário cíclico.")
 
-    if not filiais_disponiveis:
-        st.error("Nenhuma filial de Joinville encontrada nos dados carregados.")
+    empresas_disp = sorted(df_jlle["Empresa"].dropna().unique().tolist())
+    if not empresas_disp:
+        st.error("Nenhuma empresa encontrada nos dados de Joinville.")
         return
 
-    filial_sel = st.selectbox(
-        "Filial",
-        filiais_disponiveis,
-        key="ic_filial_sel",
-        help="A lista será gerada exclusivamente para os SKUs desta filial."
-    )
+    col_emp, col_fil = st.columns(2)
 
-    # Filtra apenas a filial selecionada
-    df_filial = df_jlle[df_jlle["Filial"] == filial_sel].copy()
+    with col_emp:
+        empresa_sel = st.selectbox("🏢 Empresa", empresas_disp, key="ic_empresa_sel")
+
+    with col_fil:
+        filiais_disp = sorted(
+            df_jlle[df_jlle["Empresa"] == empresa_sel]["Filial"].dropna().unique().tolist()
+        )
+        filial_sel = st.selectbox("📍 Filial", filiais_disp, key="ic_filial_sel")
+
+    label_unidade = f"{empresa_sel} — {filial_sel}"
+
+    # Filtra pela seleção da aba (ignora filtro global propositalmente)
+    df_filial = df_jlle[
+        (df_jlle["Empresa"] == empresa_sel) &
+        (df_jlle["Filial"]  == filial_sel)
+    ].copy()
 
     if df_filial.empty:
-        st.warning(f"Sem dados para a filial **{filial_sel}**.")
+        st.warning(f"Sem dados para **{label_unidade}**.")
         return
 
-    # Inicializa controle de sessão para esta filial
-    inicializar_controle(filial_sel)
-    contados = obter_contados(filial_sel)
+    # Inicializa controle de sessão para empresa+filial
+    inicializar_controle(empresa_sel, filial_sel)
+    contados = obter_contados(empresa_sel, filial_sel)
 
     # ── Calcula score ─────────────────────────────────────────────────────
-    df_score = calcular_score(df_filial, contados)
-    total_skus       = len(df_score)
-    total_contados   = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
-    pct_cobertura    = (total_contados / total_skus * 100) if total_skus > 0 else 0
-    total_diverg     = int((df_score["Divergência"] != 0).sum())
-    skus_A           = int((df_score["Curva ABC"] == "A").sum())
-    valor_total      = df_score["Vl Total ERP"].sum()
+    df_score     = calcular_score(df_filial, contados)
+    total_skus   = len(df_score)
+    total_contados = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
+    pct_cobertura  = (total_contados / total_skus * 100) if total_skus > 0 else 0
+    total_diverg   = int((df_score["Divergência"] != 0).sum())
+    skus_A         = int((df_score["Curva ABC"] == "A").sum())
+    valor_total    = df_score["Vl Total ERP"].sum()
 
     # ── Métricas ──────────────────────────────────────────────────────────
     st.markdown("---")
-    st.markdown(f"### 2. Visão geral — {filial_sel}")
+    st.markdown(f"### 2. Visão geral — {label_unidade}")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total de SKUs",        f"{total_skus:,}")
-    c2.metric("SKUs Divergentes",     f"{total_diverg:,}")
-    c3.metric("SKUs Curva A",         f"{skus_A:,}")
-    c4.metric("Valor Total Estoque",  f"R$ {formatar_br(valor_total)}")
+    c1.metric("Total de SKUs",       f"{total_skus:,}")
+    c2.metric("SKUs Divergentes",    f"{total_diverg:,}")
+    c3.metric("SKUs Curva A",        f"{skus_A:,}")
+    c4.metric("Valor Total Estoque", f"R$ {formatar_br(valor_total)}")
 
     # ── Barra de cobertura KPMG ───────────────────────────────────────────
     st.markdown("#### Cobertura KPMG (ano vigente)")
-    falta = total_skus - total_contados
-
+    falta     = total_skus - total_contados
     cor_barra = "#27AE60" if pct_cobertura >= 100 else "#EC6E21"
+
     st.markdown(
         f"""
         <div style="background:#004550;border-radius:8px;padding:12px 16px;margin-bottom:8px;">
@@ -308,13 +313,10 @@ def render(df_jlle: pd.DataFrame, df_outras: pd.DataFrame, formatar_br):
     if pct_cobertura >= 100:
         st.success("🎉 Todos os SKUs foram contados neste período. Exigência KPMG cumprida!")
 
-    # Botão para resetar contagem (novo período)
     with st.expander("⚙️ Controles do período"):
-        st.caption(
-            "Ao iniciar um novo período anual, clique abaixo para zerar o histórico desta filial."
-        )
-        if st.button(f"🔄 Iniciar novo período — {filial_sel}", key="ic_reset"):
-            resetar_contagem(filial_sel)
+        st.caption("Ao iniciar um novo período anual, clique abaixo para zerar o histórico desta unidade.")
+        if st.button(f"🔄 Iniciar novo período — {label_unidade}", key="ic_reset"):
+            resetar_contagem(empresa_sel, filial_sel)
             st.success("Histórico zerado. Novo período iniciado!")
             st.rerun()
 
@@ -343,10 +345,10 @@ def render(df_jlle: pd.DataFrame, df_outras: pd.DataFrame, formatar_br):
 
     else:
         pct_opcoes = {
-            "5% — Críticos":       0.05,
+            "5% — Críticos":         0.05,
             "10% — Alta prioridade": 0.10,
-            "20% — Rotina":        0.20,
-            "30% — Controle amplo": 0.30,
+            "20% — Rotina":          0.20,
+            "30% — Controle amplo":  0.30,
         }
         pct_label = st.select_slider(
             "Faixa percentual",
@@ -373,7 +375,7 @@ def render(df_jlle: pd.DataFrame, df_outras: pd.DataFrame, formatar_br):
     )
 
     colunas_exibir = [
-        "Produto", "Descrição", "Filial",
+        "Produto", "Descrição", "Empresa", "Filial",
         "Curva ABC", "Score", "Já Contado", "Dias s/ Contagem",
         "Saldo ERP (Total)", "Saldo WMS", "Divergência",
         "Vl Total ERP", "Motivo", "Origem"
@@ -423,7 +425,7 @@ def render(df_jlle: pd.DataFrame, df_outras: pd.DataFrame, formatar_br):
 
     if st.button("✅ Confirmar contagem dos produtos selecionados", key="ic_confirmar"):
         if produtos_sel:
-            marcar_contados(filial_sel, produtos_sel)
+            marcar_contados(empresa_sel, filial_sel, produtos_sel)
             st.success(f"{len(produtos_sel)} produto(s) marcado(s) como contado(s). Score atualizado!")
             st.rerun()
         else:
@@ -436,12 +438,11 @@ def render(df_jlle: pd.DataFrame, df_outras: pd.DataFrame, formatar_br):
     with col_ex1:
         st.caption(
             f"O arquivo contém {len(df_exibir)} itens ordenados por score. "
-            f"Filial: {filial_sel}."
+            f"Unidade: {label_unidade}."
         )
     with col_ex2:
-        nome_arquivo = (
-            f"inv_ciclico_{filial_sel.replace(' ', '_').replace('-', '')}_{date.today().strftime('%d%m%Y')}.xlsx"
-        )
+        slug = f"{empresa_sel}_{filial_sel}".replace(" ", "_").replace("-", "")
+        nome_arquivo = f"inv_ciclico_{slug}_{date.today().strftime('%d%m%Y')}.xlsx"
         st.download_button(
             label="📥 Baixar Excel para Contagem",
             data=gerar_xlsx(df_exibir),
