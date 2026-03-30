@@ -41,9 +41,9 @@ except ImportError:
 def _slug(empresa, filial):
     return f"{empresa}_{filial}".replace(" ", "_").replace("-", "")
 
-def produtos_contados_no_ciclo(e, f) -> set:
+def produtos_contados_no_ciclo(engine, e, f) -> set:
     """Retorna união de todos os produtos contados nos uploads do ciclo ativo."""
-    ciclo = db_obter_ciclo_ativo(e, f)
+    ciclo = db_obter_ciclo_ativo(engine, e, f)
     if not ciclo:
         return set()
     todos = set()
@@ -51,13 +51,15 @@ def produtos_contados_no_ciclo(e, f) -> set:
         todos.update(u.get("produtos", []))
     return todos
 
-def fechar_ciclo(e, f):
+def fechar_ciclo(engine, e, f):
     """Fecha o ciclo, persiste no banco e marca produtos como contados."""
-    ciclo   = db_obter_ciclo_ativo(e, f)
+    ciclo   = db_obter_ciclo_ativo(engine, e, f)
     if not ciclo:
         return
     uploads = ciclo.get("uploads", [])
-    todos_contados = produtos_contados_no_ciclo(e, f)
+    todos_contados = set()
+    for u in uploads:
+        todos_contados.update(u.get("produtos", []))
     data_iso = uploads[-1].get("data_iso", date.today().isoformat()) if uploads else date.today().isoformat()
 
     produtos_lista = set(ciclo.get("produtos_lista", []))
@@ -70,16 +72,15 @@ def fechar_ciclo(e, f):
         "cobertura_pct":     pct,
         "data_fechamento":   date.today().strftime("%d/%m/%Y"),
         "status":            "Concluído",
-        "num_inv":           uploads[-1].get("num_inv","—")      if uploads else "—",
-        "data":              uploads[-1].get("data","—")         if uploads else "—",
-        "responsavel":       uploads[-1].get("responsavel","—")  if uploads else "—",
-        "acuracidade":       uploads[-1].get("acuracidade","—")  if uploads else "—",
+        "num_inv":           uploads[-1].get("num_inv","—")     if uploads else "—",
+        "data":              uploads[-1].get("data","—")        if uploads else "—",
+        "responsavel":       uploads[-1].get("responsavel","—") if uploads else "—",
+        "acuracidade":       uploads[-1].get("acuracidade","—") if uploads else "—",
     }
-    # Persiste no banco
-    db_gravar_ciclo(e, f, ciclo_fechado)
-    db_marcar_contados(e, f, list(todos_contados),
+    db_gravar_ciclo(engine, e, f, ciclo_fechado)
+    db_marcar_contados(engine, e, f, list(todos_contados),
                        data=data_iso, num_ciclo=ciclo.get("num_ciclo",""))
-    db_fechar_ciclo_ativo(e, f)
+    db_fechar_ciclo_ativo(engine, e, f)
 
 
 # ── Processador resultado WMS ─────────────────────────────────────────────────
@@ -553,27 +554,13 @@ def render(df_jlle, df_outras, formatar_br):
     if st.session_state.pop("ic_fechado_msg", False):
         st.success("✅ Inventário fechado e registrado no histórico KPMG!")
 
-    # Carrega dados do banco
-    try:
-        contados    = db_obter_contados(empresa_sel, filial_sel)
-        ciclos      = db_obter_ciclos(empresa_sel, filial_sel)
-        ciclo_ativo = db_obter_ciclo_ativo(empresa_sel, filial_sel)
-    except Exception as _db_err:
-        st.error(f"❌ Erro ao conectar ao banco: {_db_err}")
-        contados, ciclos, ciclo_ativo = {}, [], None
+    # Engine do banco
+    engine_db = st.session_state.get("_engine")
 
-    # DEBUG temporário — testa gravação direta
-    engine_debug = st.session_state.get("_engine")
-    if engine_debug is None:
-        st.warning("⚠️ Engine não encontrada no session_state.")
-    else:
-        try:
-            from sqlalchemy import text as _text
-            with engine_debug.connect() as _conn:
-                _conn.execute(_text("SELECT 1 FROM inventario_ciclos LIMIT 1"))
-            st.success("✅ Conexão com banco OK — tabela inventario_ciclos acessível.")
-        except Exception as _e:
-            st.error(f"❌ Erro ao acessar tabela: {_e}")
+    # Carrega dados do banco
+    contados    = db_obter_contados(engine_db, empresa_sel, filial_sel)
+    ciclos      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
+    ciclo_ativo = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
 
     df_score   = calcular_score(df_filial, contados)
     total_skus = len(df_score)
@@ -687,7 +674,7 @@ def render(df_jlle, df_outras, formatar_br):
         st.info(f"Nº do ciclo: **{num_ciclo}**")
 
     # Salva ciclo ativo no banco
-    db_salvar_ciclo_ativo(empresa_sel, filial_sel, {
+    db_salvar_ciclo_ativo(engine_db, empresa_sel, filial_sel, {
         "num_ciclo":      num_ciclo,
         "data_geracao":   date.today().strftime("%d/%m/%Y"),
         "label":          label,
@@ -700,9 +687,9 @@ def render(df_jlle, df_outras, formatar_br):
     # Upload do resultado WMS direto aqui
     st.markdown("---")
     # Recarrega ciclo ativo e progresso
-    ciclo_ativo        = db_obter_ciclo_ativo(empresa_sel, filial_sel)
+    ciclo_ativo = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
     uploads_anteriores = ciclo_ativo.get("uploads", []) if ciclo_ativo else []
-    ja_contados_ciclo  = produtos_contados_no_ciclo(empresa_sel, filial_sel)
+    ja_contados_ciclo  = produtos_contados_no_ciclo(engine_db, empresa_sel, filial_sel)
     lista_atual        = ciclo_ativo or {}
     produtos_lista     = set(lista_atual.get("produtos_lista", []))
     faltam             = produtos_lista - ja_contados_ciclo
@@ -791,7 +778,7 @@ def render(df_jlle, df_outras, formatar_br):
                 use_container_width=True, hide_index=True)
 
             if st.button("📥 Adicionar esta etapa ao ciclo", key="ic_add_etapa", type="primary"):
-                acumular_upload(empresa_sel, filial_sel, {
+                db_acumular_upload(engine_db, empresa_sel, filial_sel, {
                     "num_inv":     res.get("num_inv","—"),
                     "data":        res.get("data","—"),
                     "data_iso":    res.get("data_iso", date.today().isoformat()),
@@ -809,7 +796,7 @@ def render(df_jlle, df_outras, formatar_br):
     st.markdown("---")
     if pct_ciclo >= 100:
         if st.button("🏁 Fechar inventário", key="ic_fechar", type="primary"):
-            fechar_ciclo(empresa_sel, filial_sel)
+            fechar_ciclo(engine_db, empresa_sel, filial_sel)
             st.session_state["ic_fechado_msg"] = True
             st.rerun()
 
@@ -864,6 +851,6 @@ def render(df_jlle, df_outras, formatar_br):
                     st.caption("PDF indisponível — instale reportlab e matplotlib")
             with col_reset:
                 if st.button("🔄 Novo período", key="ic_reset"):
-                    db_resetar_tudo(empresa_sel, filial_sel)
+                    db_resetar_tudo(engine_db, empresa_sel, filial_sel)
                     st.success("Novo período iniciado!")
                     st.rerun()
