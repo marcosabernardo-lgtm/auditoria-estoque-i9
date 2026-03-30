@@ -254,7 +254,7 @@ def cruzar_wms_erp(arquivo_wms, arquivo_erp):
     # Agrupamento: Total_WMS por Filial+Produto+Armazem, Qtd_Locais = nº de localizações WMS
     grp = df.groupby(chaves, as_index=False).agg(
         Total_WMS  =("Saldo WMS", "sum"),
-        Total_ERP  =("Saldo ERP", "sum"),  # Soma saldos ERP por Filial+Produto+Armazem
+        Total_ERP  =("Saldo ERP", "max"),  # ERP tem 1 linha por Filial+Produto+Armazem — max evita duplicar ao fazer join com N localizações WMS
         Qtd_Locais =("Saldo WMS", lambda x: (x > 0).sum()),  # só conta locais com saldo
     )
     # Qtd_Locais mínimo 1 para evitar divisão por zero
