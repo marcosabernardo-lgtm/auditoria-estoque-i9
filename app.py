@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 from sqlalchemy import create_engine
-from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
+from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, buscar_ultimos_movimentos, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
 from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
@@ -109,6 +109,7 @@ with st.sidebar:
 # --- CORPO PRINCIPAL ---
 st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
 df_base = carregar_do_banco("auditoria")
+df_movs = buscar_ultimos_movimentos(get_engine()) if df_base is not None else pd.DataFrame()
 
 if df_base is not None:
     # DEBUG TEMPORÁRIO — remover após validar
@@ -176,6 +177,26 @@ if df_base is not None:
 
     v_jlle_view = preparar_view(dff_jlle)
     v_outras_view = preparar_view(dff_outras)
+
+    # Enriquece com últimos movimentos se disponível
+    def enriquecer_com_movimentos(df_view, df_movs):
+        if df_movs.empty or "Produto" not in df_view.columns:
+            return df_view
+        # Normaliza Filial para cruzamento (sufixo apenas, ex: "Filial")
+        df_m = df_movs.copy()
+        df_m["Filial_Mov"] = df_m["Filial_Mov"].str.split(" - ").str[-1].str.strip()
+        merged = df_view.merge(
+            df_m[["Produto", "Empresa_Mov", "Filial_Mov",
+                  "Últ. Movimento", "Data Últ. Mov.", "Doc. Últ. Mov."]],
+            left_on=["Produto", "Empresa", "Filial"],
+            right_on=["Produto", "Empresa_Mov", "Filial_Mov"],
+            how="left"
+        ).drop(columns=["Empresa_Mov", "Filial_Mov"], errors="ignore")
+        return merged
+
+    if not df_movs.empty:
+        v_jlle_view   = enriquecer_com_movimentos(v_jlle_view, df_movs)
+        v_outras_view = enriquecer_com_movimentos(v_outras_view, df_movs)
 
     # CHAMADA DAS ABAS
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações", "🔄 Inv. Cíclico"])

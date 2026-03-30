@@ -235,3 +235,55 @@ def buscar_ultima_movimentacao_geral(engine):
         return pd.read_sql(query, engine)
     except Exception as exc:
         raise RuntimeError(f"Erro ao buscar última movimentação geral: {exc}") from exc
+
+
+def buscar_ultimos_movimentos(engine):
+    """
+    Retorna o movimento mais recente (entrada ou saída) por Produto + Filial.
+    Usado para enriquecer as tabelas de auditoria Joinville e Filiais.
+    Colunas retornadas: PRODUTO, Empresa_Filial_Nome, TIPOMOVIMENTO, DIGITACAO, DOCUMENTO
+    """
+    if engine is None:
+        return pd.DataFrame()
+    try:
+        query = text("""
+            SELECT DISTINCT ON ("PRODUTO", "Empresa_Filial_Nome")
+                "PRODUTO",
+                "Empresa_Filial_Nome",
+                "TIPOMOVIMENTO",
+                "DIGITACAO",
+                "DOCUMENTO"
+            FROM movimentacoes
+            ORDER BY "PRODUTO", "Empresa_Filial_Nome", "DIGITACAO" DESC
+        """)
+        df = pd.read_sql(query, engine)
+        if df.empty:
+            return pd.DataFrame()
+
+        # Normaliza produto
+        df["PRODUTO"] = df["PRODUTO"].astype(str).str.zfill(6)
+
+        # Separa Empresa e Filial
+        split = df["Empresa_Filial_Nome"].str.split(" - ", n=1, expand=True)
+        df["Empresa_Mov"] = split[0].str.strip().fillna("")
+        df["Filial_Mov"]  = split[1].str.strip().fillna("") if split.shape[1] > 1 else ""
+        df = df.drop(columns=["Empresa_Filial_Nome"])
+
+        # Formata data e documento
+        df["DIGITACAO"] = pd.to_datetime(df["DIGITACAO"], errors="coerce").dt.strftime("%d/%m/%Y")
+        df["DOCUMENTO"] = (
+            df["DOCUMENTO"].astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.strip()
+            .str.zfill(9)
+        )
+
+        return df.rename(columns={
+            "PRODUTO":       "Produto",
+            "TIPOMOVIMENTO": "Últ. Movimento",
+            "DIGITACAO":     "Data Últ. Mov.",
+            "DOCUMENTO":     "Doc. Últ. Mov.",
+        })
+    except Exception as exc:
+        logger.warning("buscar_ultimos_movimentos: erro — %s", exc)
+        return pd.DataFrame()

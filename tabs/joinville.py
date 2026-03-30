@@ -25,10 +25,22 @@ def render(df, estilizar_func, excel_func):
                     help="Número de localizações WMS onde este produto está armazenado",
                     format="%d",
                 ),
-                "Saldo ERP": st.column_config.NumberColumn(
-                    "Saldo ERP",
+                "Saldo ERP (Total)": st.column_config.NumberColumn(
+                    "Saldo ERP (Total)",
                     help="Saldo total no ERP — igual em todas as linhas do mesmo produto",
                     format="%.2f",
+                ),
+                "Últ. Movimento": st.column_config.TextColumn(
+                    "Últ. Movimento",
+                    help="Tipo do último movimento: Entrada ou Saída",
+                ),
+                "Data Últ. Mov.": st.column_config.TextColumn(
+                    "Data Últ. Mov.",
+                    help="Data do último movimento registrado",
+                ),
+                "Doc. Últ. Mov.": st.column_config.TextColumn(
+                    "Doc. Últ. Mov.",
+                    help="Número do documento do último movimento",
                 ),
             }
         )
