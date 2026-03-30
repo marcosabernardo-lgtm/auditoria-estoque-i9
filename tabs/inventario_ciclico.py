@@ -554,9 +554,18 @@ def render(df_jlle, df_outras, formatar_br):
         st.success("✅ Inventário fechado e registrado no histórico KPMG!")
 
     # Carrega dados do banco
-    contados    = db_obter_contados(empresa_sel, filial_sel)
-    ciclos      = db_obter_ciclos(empresa_sel, filial_sel)
-    ciclo_ativo = db_obter_ciclo_ativo(empresa_sel, filial_sel)
+    try:
+        contados    = db_obter_contados(empresa_sel, filial_sel)
+        ciclos      = db_obter_ciclos(empresa_sel, filial_sel)
+        ciclo_ativo = db_obter_ciclo_ativo(empresa_sel, filial_sel)
+    except Exception as _db_err:
+        st.error(f"❌ Erro ao conectar ao banco: {_db_err}")
+        contados, ciclos, ciclo_ativo = {}, [], None
+
+    # DEBUG temporário
+    engine_ok = st.session_state.get("_engine") is not None
+    if not engine_ok:
+        st.warning("⚠️ Engine não encontrada no session_state — banco não conectado.")
 
     df_score   = calcular_score(df_filial, contados)
     total_skus = len(df_score)
