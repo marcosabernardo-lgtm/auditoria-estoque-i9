@@ -219,6 +219,17 @@ def cruzar_wms_erp(arquivo_wms, arquivo_erp):
     if "Descrição" not in df_wms.columns and "Descrição" in df_erp.columns:
         cols_erp_merge.append("Descrição")
 
+    # Normaliza acentos nas chaves de ambos os lados antes do merge
+    import unicodedata as _udm
+    def _norm(s):
+        return "".join(c for c in _udm.normalize("NFD", str(s)) if _udm.category(c) != "Mn")
+
+    for col in chaves:
+        if col in df_wms.columns:
+            df_wms[col] = df_wms[col].astype(str).apply(_norm)
+        if col in df_erp.columns:
+            df_erp[col] = df_erp[col].astype(str).apply(_norm)
+
     df = df_wms.merge(df_erp[cols_erp_merge], on=chaves, how="left")
 
     if "Vl Unit_x" in df.columns:
