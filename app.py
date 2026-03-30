@@ -144,18 +144,19 @@ if df_base is not None:
 
     # Separação Joinville x Outras Filiais
     # Classificação exata conforme tabela de referência
+    # Sempre sem acento — processador normaliza antes de gravar no banco
     lista_joinville = [
         "Tools - Filial",
-        "Maquinas - Filial",   "Máquinas - Filial",
+        "Maquinas - Filial",
         "Service - Matriz",
         "Service - Filial",
     ]
     lista_outras = [
         "Tools - Matriz",
-        "Maquinas - Matriz",   "Máquinas - Matriz",
-        "Maquinas - Jundiai",  "Máquinas - Jundiai",
-        "Robotica - Matriz",   "Robótica - Matriz",
-        "Robotica - Jaragua",  "Robótica - Jaragua",
+        "Maquinas - Matriz",
+        "Maquinas - Jundiai",
+        "Robotica - Matriz",
+        "Robotica - Jaragua",
         "Service - Caxias",
         "Service - Jundiai",
     ]
