@@ -244,9 +244,15 @@ def cruzar_wms_erp(arquivo_wms, arquivo_erp):
     cols_wms_merge = chaves + [c for c in ["Localização", "Saldo WMS"]
                                 if c in df_wms.columns]
 
+    # Garante 1 linha por Filial+Produto+Armazem no ERP antes do join
+    # Evita duplicação do saldo ERP quando há múltiplas localizações WMS
+    df_erp_dedup = df_erp.groupby(chaves, as_index=False).agg(
+        **{c: (c, "max") for c in df_erp.columns if c not in chaves}
+    )
+
     # ERP é a base — left join com WMS
     # Produtos no ERP sem WMS → Saldo WMS = 0 (divergente)
-    df = df_erp.merge(df_wms[cols_wms_merge], on=chaves, how="left")
+    df = df_erp_dedup.merge(df_wms[cols_wms_merge], on=chaves, how="left")
 
     df["Saldo WMS"] = pd.to_numeric(df.get("Saldo WMS", 0), errors="coerce").fillna(0)
     df["Vl Unit"]   = pd.to_numeric(df.get("Vl Unit",   0), errors="coerce").fillna(0)
