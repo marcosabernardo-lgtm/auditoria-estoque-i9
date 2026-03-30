@@ -4,6 +4,7 @@ import numpy as np
 import io
 from sqlalchemy import create_engine
 from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
+from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
 from tabs import joinville, filiais, indicadores, movimentacoes, inventario_ciclico
@@ -46,7 +47,7 @@ def to_float_br(serie):
 def estilizar_tabela(df):
     fmt_cols = {}
     for col in df.columns:
-        if any(x in col for x in ["Saldo", "Divergência"]) and "Vl" not in col: fmt_cols[col] = "{:,.2f}"
+        if any(x in col for x in ["Saldo", "Divergência", "Qtd"]) and "Vl" not in col: fmt_cols[col] = "{:,.2f}"
         elif any(x in col for x in ["Vl Unit", "Vl Total", "Preço", "Vl Divergência", "Vl Total ERP"]): fmt_cols[col] = "R$ {:,.2f}"
     styled = df.style.apply(lambda r: ['background-color: #005562; color: #ffffff; font-size: 0.84rem;'] * len(r), axis=1)
     if "Status" in df.columns:
@@ -75,8 +76,23 @@ def formatar_br(valor):
 with st.sidebar:
     st.header("⚙️ Atualizar Bases")
     with st.expander("1. Auditoria"):
-        u_wms, u_erp = st.file_uploader("WMS", type=["xlsx"]), st.file_uploader("ERP", type=["xlsx"])
-        if u_wms and u_erp and st.button("🚀 Enviar Auditoria"): st.success("Enviado!")
+        u_wms = st.file_uploader("WMS", type=["xlsx"], key="up_wms")
+        u_erp = st.file_uploader("ERP", type=["xlsx"], key="up_erp")
+        if u_wms and u_erp and st.button("🚀 Processar e Enviar Auditoria"):
+            with st.spinner("Cruzando WMS x ERP..."):
+                try:
+                    df_auditoria = cruzar_wms_erp(u_wms, u_erp)
+                    if df_auditoria.empty:
+                        st.error("Cruzamento resultou em dados vazios. Verifique os arquivos.")
+                    else:
+                        engine = get_engine()
+                        if engine:
+                            df_auditoria.to_sql("auditoria", engine, if_exists="replace", index=False)
+                            st.success(f"✅ {len(df_auditoria)} linhas gravadas com rateio correto!")
+                        else:
+                            st.error("Sem conexão com o banco.")
+                except Exception as e:
+                    st.error(f"Erro ao processar: {e}")
     with st.expander("2. Notas Fiscais"):
         u_movs = st.file_uploader("Arquivos Protheus", type=["xlsx"], accept_multiple_files=True)
         if u_movs and st.button("📦 Processar Movimentações"):
@@ -114,20 +130,25 @@ if df_base is not None:
     dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
     dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
 
-    # Reordenar colunas e enriquecer com Qtd Locais
+    # Reordenar colunas — dados já vêm com rateio correto do processador_auditoria
     def preparar_view(df):
         if df.empty: return df
-        df_v = df.rename(columns={
-            "C Unitario": "Vl Unit",
-            "Saldo ERP (Total)": "Saldo ERP",
-        })
-        # Qtd Locais: conta quantas linhas (localizações) cada produto tem
-        qtd_locais = df_v.groupby("Produto")["Produto"].transform("count").astype(int)
-        df_v.insert(df_v.columns.get_loc("Produto") + 1, "Qtd Locais", qtd_locais)
-        # Reposiciona Vl Unit após Descrição
-        cols = [c for c in df_v.columns if c != "Vl Unit"]
-        if "Descrição" in cols: cols.insert(cols.index("Descrição") + 1, "Vl Unit")
-        return df_v[cols]
+        df_v = df.copy()
+        # Qtd Locais: usa coluna do banco se existir, senão calcula
+        if "Qtd_Locais" in df_v.columns:
+            df_v = df_v.rename(columns={"Qtd_Locais": "Qtd Locais"})
+        elif "Produto" in df_v.columns:
+            df_v["Qtd Locais"] = df_v.groupby("Produto")["Produto"].transform("count").astype(int)
+        # Ordem de colunas amigável
+        ordem = [
+            "Status", "Empresa", "Filial", "Localização", "Armazem",
+            "Produto", "Qtd Locais", "Descrição", "Vl Unit",
+            "Saldo ERP (Total)", "Saldo ERP (Rateado)", "Saldo WMS",
+            "Divergência", "Vl Divergência", "Vl Total ERP",
+        ]
+        colunas_ok = [c for c in ordem if c in df_v.columns]
+        resto = [c for c in df_v.columns if c not in colunas_ok]
+        return df_v[colunas_ok + resto]
 
     v_jlle_view = preparar_view(dff_jlle)
     v_outras_view = preparar_view(dff_outras)
