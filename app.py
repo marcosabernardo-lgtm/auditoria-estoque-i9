@@ -111,6 +111,9 @@ st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_h
 df_base = carregar_do_banco("auditoria")
 
 if df_base is not None:
+    # DEBUG TEMPORÁRIO — remover após validar
+    with st.expander("🔍 Debug: valores únicos de Filial no banco"):
+        st.write(sorted(df_base["Filial"].dropna().unique().tolist()))
     # Filtros
     c1, c2, c3 = st.columns(3)
     with c1: f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
