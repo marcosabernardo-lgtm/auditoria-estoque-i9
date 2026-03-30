@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 from sqlalchemy import create_engine
-from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, buscar_ultimos_movimentos, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
+from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, buscar_movimentacoes_por_documento, buscar_ultimos_movimentos, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
 from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
@@ -199,6 +199,11 @@ if df_base is not None:
         v_outras_view = enriquecer_com_movimentos(v_outras_view, df_movs)
 
     # CHAMADA DAS ABAS
+    # Navegação automática para Movimentações quando documento é selecionado
+    tab_idx = 3 if st.session_state.get("nav_para_mov") else 0
+    if st.session_state.get("nav_para_mov"):
+        st.session_state["nav_para_mov"] = False
+
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🕒 Movimentações", "🔄 Inv. Cíclico"])
 
     with tab1:
@@ -208,7 +213,17 @@ if df_base is not None:
     with tab3:
         indicadores.render(dff_jlle, formatar_br)
     with tab4:
-        movimentacoes.render(f_code.zfill(6) if f_code else "", get_engine(), buscar_movimentacoes_nuvem, estilizar_tabela, to_float_br)
+        # Usa documento do session_state se navegou via clique na tabela
+        doc_nav = st.session_state.pop("mov_doc_busca_value", None)
+        movimentacoes.render(
+            f_code.zfill(6) if f_code else "",
+            engine=get_engine(),
+            buscar_func=buscar_movimentacoes_nuvem,
+            buscar_doc_func=buscar_movimentacoes_por_documento,
+            estilizar_func=estilizar_tabela,
+            to_float_func=to_float_br,
+            doc_inicial=doc_nav,
+        )
     with tab5:
         inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)
 else:

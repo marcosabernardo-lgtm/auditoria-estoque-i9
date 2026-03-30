@@ -287,3 +287,26 @@ def buscar_ultimos_movimentos(engine):
     except Exception as exc:
         logger.warning("buscar_ultimos_movimentos: erro — %s", exc)
         return pd.DataFrame()
+
+
+def buscar_movimentacoes_por_documento(engine, documento_parcial):
+    """
+    Busca todas as movimentações cujo DOCUMENTO contém o texto informado.
+    Retorna todas as linhas (sem deduplicar) para visão completa do documento.
+    """
+    if engine is None:
+        raise ConnectionError("Engine não inicializada. Verifique a conexão com o banco.")
+
+    termo = str(documento_parcial).strip()
+    if not termo:
+        return pd.DataFrame()
+
+    try:
+        query = text(
+            '''SELECT * FROM movimentacoes
+               WHERE "DOCUMENTO" ILIKE :doc
+               ORDER BY "DIGITACAO" DESC'''
+        )
+        return pd.read_sql(query, engine, params={"doc": f"%{termo}%"})
+    except Exception as exc:
+        raise RuntimeError(f"Erro ao buscar movimentações por documento '{documento_parcial}': {exc}") from exc
