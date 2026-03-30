@@ -697,6 +697,13 @@ def render(df_jlle, df_outras, formatar_br):
     ja_contados_ciclo = {str(p).strip().zfill(6) for p in ja_contados_ciclo}
     faltam            = produtos_lista - ja_contados_ciclo
     pct_ciclo         = len(ja_contados_ciclo & produtos_lista) / len(produtos_lista) * 100 if produtos_lista else 0
+
+    # DEBUG temporário
+    with st.expander("🔍 Debug — comparação de produtos"):
+        st.write("**Produtos na lista:**", sorted(produtos_lista))
+        st.write("**Produtos contados no ciclo:**", sorted(ja_contados_ciclo))
+        st.write("**Faltam:**", sorted(faltam))
+        st.write("**% cobertura:**", pct_ciclo)
     cor_prog           = "#27AE60" if pct_ciclo >= 100 else "#EC6E21"
 
     st.markdown("---")
