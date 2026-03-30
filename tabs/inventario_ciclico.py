@@ -321,6 +321,17 @@ def render(df_jlle, df_outras, formatar_br):
 
     # ── Gerar lista do ciclo ─────────────────────────────────────────────
     st.markdown("### Gerar lista do ciclo")
+
+    # Aviso de atualização dos dados
+    data_aud = st.session_state.get("_data_auditoria", None)
+    col_av1, col_av2 = st.columns([3, 2])
+    with col_av1:
+        if data_aud:
+            st.caption(f"📅 Dados de auditoria carregados em: **{data_aud}** — itens novos adicionados após essa data só aparecem após recarregar.")
+        else:
+            st.caption("📅 Dados carregados nesta sessão. Recarregue a página para garantir que itens novos estejam incluídos.")
+    with col_av2:
+        st.caption(f"⚠️ Itens divergentes reaparecem na lista mesmo após contados.")
     modo = st.radio("Modo", ["Quantidade fixa","Percentual"], horizontal=True, key="ic_modo")
 
     if modo == "Quantidade fixa":

@@ -109,6 +109,9 @@ with st.sidebar:
 # --- CORPO PRINCIPAL ---
 st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
 df_base = carregar_do_banco("auditoria")
+if df_base is not None:
+    from datetime import datetime as _dt
+    st.session_state["_data_auditoria"] = _dt.now().strftime("%d/%m/%Y %H:%M")
 
 
 if df_base is not None:
