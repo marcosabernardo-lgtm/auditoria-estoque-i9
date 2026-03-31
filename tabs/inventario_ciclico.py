@@ -517,7 +517,19 @@ def render(df_jlle, df_outras, formatar_br):
     if df_jlle is None or df_jlle.empty:
         st.warning("Nenhum dado encontrado. Carregue os dados na sidebar."); return
 
-    # Empresa/Filial vivem no session_state — só definidos após "Gerar lista"
+    # Empresa/Filial: vêm da tela de seleção do app.py (_app_empresa/_app_filial)
+    # ic_empresa_sel/ic_filial_sel são mantidos como alias para compatibilidade interna
+    _app_emp = st.session_state.get("_app_empresa")
+    _app_fil = st.session_state.get("_app_filial")
+    if _app_emp and _app_fil:
+        st.session_state.setdefault("ic_empresa_sel", _app_emp)
+        st.session_state.setdefault("ic_filial_sel",  _app_fil)
+        # Se app mudou empresa/filial, sincroniza
+        if st.session_state.get("ic_empresa_sel") != _app_emp or \
+           st.session_state.get("ic_filial_sel")  != _app_fil:
+            st.session_state["ic_empresa_sel"] = _app_emp
+            st.session_state["ic_filial_sel"]  = _app_fil
+
     empresa_sel = st.session_state.get("ic_empresa_sel")
     filial_sel  = st.session_state.get("ic_filial_sel")
 
@@ -596,7 +608,7 @@ def render(df_jlle, df_outras, formatar_br):
 
         # Empresa/filial já definidos pelo app.py — apenas confirma com botão
         if not empresa_sel or not filial_sel:
-            st.info("👆 Selecione a Empresa e a Filial na tela inicial para começar.")
+            st.info("👆 Volte à tela inicial e selecione a Empresa e a Filial para começar.")
             return
 
         col_info, col_btn = st.columns([4, 1])
