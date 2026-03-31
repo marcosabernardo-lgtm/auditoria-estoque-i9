@@ -323,27 +323,31 @@ def db_salvar_justificativas(engine, empresa, filial, num_ciclo, justificativas)
 
 # ── Upload ERP Protheus ───────────────────────────────────────────────────────
 
-def db_obter_erp_upload(engine, empresa, filial, num_ciclo):
-    if engine is None: return None
+def db_obter_erp_uploads(engine, empresa, filial, num_ciclo):
+    """Retorna lista de todos os uploads ERP do ciclo, ordenados por data."""
+    if engine is None: return []
     try:
         with engine.connect() as conn:
-            row = conn.execute(text("""
+            rows = conn.execute(text("""
                 SELECT documento, data_upload, dados_json FROM inventario_erp_upload
-                WHERE empresa=:e AND filial=:f AND num_ciclo=:c LIMIT 1
-            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchone()
-        if row is None: return None
-        return {
-            "documento":   row[0],
-            "data_upload": str(row[1]) if row[1] else "",
-            "dados":       json.loads(row[2] or "[]"),
-        }
+                WHERE empresa=:e AND filial=:f AND num_ciclo=:c
+                ORDER BY atualizado_em ASC
+            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchall()
+        return [{"documento": r[0], "data_upload": str(r[1]) if r[1] else "",
+                 "dados": json.loads(r[2] or "[]")} for r in rows]
     except Exception as ex:
-        logger.warning("db_obter_erp_upload: %s", ex)
-        return None
+        logger.warning("db_obter_erp_uploads: %s", ex)
+        return []
+
+
+def db_obter_erp_upload(engine, empresa, filial, num_ciclo):
+    """Compatibilidade: retorna primeiro upload ou None."""
+    uploads = db_obter_erp_uploads(engine, empresa, filial, num_ciclo)
+    return uploads[0] if uploads else None
 
 
 def db_salvar_erp_upload(engine, empresa, filial, num_ciclo, documento, data_upload, dados):
-    """dados = lista de dicts com as linhas do Protheus"""
+    """Acumula upload ERP — cada documento é único por ciclo."""
     if engine is None: return
     try:
         with engine.connect() as conn:
@@ -351,8 +355,8 @@ def db_salvar_erp_upload(engine, empresa, filial, num_ciclo, documento, data_upl
                 INSERT INTO inventario_erp_upload
                     (empresa, filial, num_ciclo, documento, data_upload, dados_json, atualizado_em)
                 VALUES (:e,:f,:c,:doc,:data,:dados,NOW())
-                ON CONFLICT (empresa,filial,num_ciclo)
-                DO UPDATE SET documento=EXCLUDED.documento, data_upload=EXCLUDED.data_upload,
+                ON CONFLICT (empresa,filial,num_ciclo,documento)
+                DO UPDATE SET data_upload=EXCLUDED.data_upload,
                               dados_json=EXCLUDED.dados_json, atualizado_em=NOW()
             """), {
                 "e":empresa,"f":filial,"c":num_ciclo,

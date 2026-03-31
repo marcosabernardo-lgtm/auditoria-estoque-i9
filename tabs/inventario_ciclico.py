@@ -15,7 +15,7 @@ try:
         db_obter_ciclo_ativo, db_salvar_ciclo_ativo,
         db_acumular_upload, db_fechar_ciclo_ativo, db_resetar_tudo,
         db_obter_justificativas, db_salvar_justificativas,
-        db_obter_erp_upload, db_salvar_erp_upload,
+        db_obter_erp_upload, db_obter_erp_uploads, db_salvar_erp_upload,
     )
     DB_DISPONIVEL = True
 except ImportError:
@@ -606,8 +606,9 @@ def render(df_jlle, df_outras, formatar_br):
     pct_ciclo = len(ja_cont_ciclo & pl_ciclo) / len(pl_ciclo) * 100 if pl_ciclo else 0
 
     # Estado do ERP upload para o ciclo ativo
-    erp_upload = db_obter_erp_upload(engine_db, empresa_sel, filial_sel,
-                  ciclo_ativo.get("num_ciclo","") if ciclo_ativo else "") if empresa_sel and filial_sel and ciclo_ativo else None
+    erp_uploads_ativo = db_obter_erp_uploads(engine_db, empresa_sel, filial_sel,
+                   ciclo_ativo.get("num_ciclo","") if ciclo_ativo else "") if empresa_sel and filial_sel and ciclo_ativo else []
+    erp_upload = erp_uploads_ativo[0] if erp_uploads_ativo else None
 
     etapa_nav = st.session_state.get("ic_etapa_nav", 1)
 
@@ -713,8 +714,8 @@ def render(df_jlle, df_outras, formatar_br):
         if modo == "Quantidade fixa":
             st.caption("📌 Conta um número fixo de produtos por ciclo.")
             cols_b = st.columns(4)
-            if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 2
-            for cb,qtd in zip(cols_b,[2,30,50,80]):
+            if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 4
+            for cb,qtd in zip(cols_b,[4,30,50,80]):
                 with cb:
                     if st.button(f"{qtd}",key=f"ic_q{qtd}",type="primary" if st.session_state.ic_qtd==qtd else "secondary"):
                         st.session_state.ic_qtd=qtd
@@ -744,7 +745,18 @@ def render(df_jlle, df_outras, formatar_br):
                      "Vl Total ERP":"R$ {:,.2f}","Score":"{:.2f}","Dias s/ Contagem":"{:.0f}d"}, na_rep="-"),
             use_container_width=True, hide_index=False)
 
-        num_ciclo = f"{date.today().strftime('%Y%m%d')}-{empresa_sel}-{filial_sel}".replace(" ","")
+        # Gera num_ciclo sequencial se já existe ciclo no mesmo dia
+        _base_ciclo = f"{date.today().strftime('%Y%m%d')}-{empresa_sel}-{filial_sel}".replace(" ","")
+        _ciclos_hoje = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
+        _nums_hoje = [c.get("num_ciclo","") for c in _ciclos_hoje if c.get("num_ciclo","").startswith(_base_ciclo)]
+        # Verifica também ciclo ativo
+        if ciclo_ativo and ciclo_ativo.get("num_ciclo","").startswith(_base_ciclo):
+            _nums_hoje.append(ciclo_ativo.get("num_ciclo",""))
+        if _nums_hoje:
+            _seq = len(_nums_hoje) + 1
+            num_ciclo = f"{_base_ciclo}-{_seq}"
+        else:
+            num_ciclo = _base_ciclo
         col_dl,col_info = st.columns([2,2])
         with col_dl:
             st.download_button("📥 Baixar Excel para Contagem",
@@ -1058,42 +1070,50 @@ def render(df_jlle, df_outras, formatar_br):
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 5. Upload do relatório ERP (Protheus)")
-        st.caption("Importe o Excel de inventário gerado pelo Protheus após a importação no ERP.")
+        st.caption("Importe os Excels de inventário gerados pelo Protheus — um por etapa de contagem.")
 
         if not ciclo_ativo:
             st.warning("⚠️ Nenhum ciclo ativo. Gere a lista primeiro."); return
 
         num_ciclo_erp = ciclo_ativo.get("num_ciclo","")
 
-        # Mostra upload já salvo se existir
-        erp_salvo = db_obter_erp_upload(engine_db, empresa_sel, filial_sel, num_ciclo_erp)
-        if erp_salvo:
-            st.success(f"✅ ERP já importado — Documento: **{erp_salvo.get('documento','—')}** · "
-                       f"Data: **{erp_salvo.get('data_upload','—')}** · "
-                       f"**{len(erp_salvo.get('dados',[]))} linhas**")
-            df_erp_prev = pd.DataFrame(erp_salvo["dados"])
-            if not df_erp_prev.empty:
-                st.dataframe(df_erp_prev.head(10), use_container_width=True, hide_index=True)
-            st.caption("Faça novo upload para substituir.")
+        # Lista de uploads ERP já salvos
+        erp_uploads = db_obter_erp_uploads(engine_db, empresa_sel, filial_sel, num_ciclo_erp)
 
-        arq_erp = st.file_uploader("Selecione o Excel do Protheus", type=["xlsx"], key=f"up_erp_{num_ciclo_erp}")
+        if erp_uploads:
+            st.success(f"✅ **{len(erp_uploads)} upload(s) ERP** acumulado(s) neste ciclo:")
+            for i, u in enumerate(erp_uploads, 1):
+                n_linhas = len(u.get("dados",[]))
+                with st.expander(f"Etapa {i} — Documento {u.get('documento','—')} · {u.get('data_upload','—')} · {n_linhas} linha(s)"):
+                    df_prev = pd.DataFrame(u["dados"])
+                    if not df_prev.empty:
+                        st.dataframe(df_prev, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum upload ERP ainda. Faça o upload abaixo.")
+
+        st.markdown("---")
+        st.markdown("##### Adicionar novo upload ERP")
+        arq_erp = st.file_uploader(
+            "Selecione o Excel do Protheus",
+            type=["xlsx"],
+            key=f"up_erp_{num_ciclo_erp}_{len(erp_uploads)}")
+
         if arq_erp:
             try:
                 df_erp = pd.read_excel(arq_erp, sheet_name=0, header=0)
-                # Normaliza colunas
                 df_erp.columns = [str(c).strip().upper() for c in df_erp.columns]
                 col_map = {
-                    "CODIGO":                  "Codigo",
-                    "DESCRICAO":               "Descricao",
-                    "TP":                      "Tipo",
-                    "GRUPO":                   "Grupo",
-                    "UM":                      "UM",
-                    "AMZ":                     "Armazem",
-                    "DOCUMENTO":               "Documento",
-                    "QUANTIDADE INVENTARIADA": "Qtd WMS",
+                    "CODIGO":                   "Codigo",
+                    "DESCRICAO":                "Descricao",
+                    "TP":                       "Tipo",
+                    "GRUPO":                    "Grupo",
+                    "UM":                       "UM",
+                    "AMZ":                      "Armazem",
+                    "DOCUMENTO":                "Documento",
+                    "QUANTIDADE INVENTARIADA":  "Qtd WMS",
                     "QTD NA DATA DO INVENTARIO":"Qtd ERP",
-                    "DIFERENCA QUANTIDADE":    "Divergencia Qtd",
-                    "DIFERENCA VALOR":         "Divergencia Vl",
+                    "DIFERENCA QUANTIDADE":     "Divergencia Qtd",
+                    "DIFERENCA VALOR":          "Divergencia Vl",
                 }
                 df_erp = df_erp.rename(columns={k:v for k,v in col_map.items() if k in df_erp.columns})
                 df_erp = df_erp.dropna(subset=["Codigo"])
@@ -1104,12 +1124,16 @@ def render(df_jlle, df_outras, formatar_br):
                         df_erp[col] = pd.to_numeric(df_erp[col], errors="coerce").fillna(0)
 
                 documento = str(df_erp["Documento"].iloc[0]).strip() if "Documento" in df_erp.columns else "—"
-                data_up   = date.today().isoformat()
 
-                st.markdown(f"**{len(df_erp)} linhas** encontradas — Documento: `{documento}`")
+                # Verifica se documento já foi importado
+                docs_ja = [u.get("documento","") for u in erp_uploads]
+                if documento in docs_ja:
+                    st.warning(f"⚠️ Documento **{documento}** já foi importado neste ciclo. O upload vai substituí-lo.")
 
-                # Preview
-                cols_prev = [c for c in ["Codigo","Descricao","Documento","Qtd WMS","Qtd ERP","Divergencia Qtd","Divergencia Vl"] if c in df_erp.columns]
+                cols_prev = [c for c in ["Codigo","Descricao","Documento","Qtd WMS","Qtd ERP",
+                                          "Divergencia Qtd","Divergencia Vl"] if c in df_erp.columns]
+
+                st.markdown(f"**{len(df_erp)} linhas** — Documento: `{documento}`")
 
                 def _style_erp(val):
                     try:
@@ -1130,11 +1154,11 @@ def render(df_jlle, df_outras, formatar_br):
                     }, na_rep="—"),
                     use_container_width=True, hide_index=True)
 
-                if st.button("💾 Salvar dados do ERP", type="primary", key="btn_salvar_erp"):
+                if st.button("💾 Adicionar este upload ERP", type="primary", key="btn_salvar_erp"):
                     db_salvar_erp_upload(engine_db, empresa_sel, filial_sel,
-                                         num_ciclo_erp, documento, data_up,
+                                         num_ciclo_erp, documento, date.today().isoformat(),
                                          df_erp[cols_prev].to_dict("records"))
-                    st.success("✅ Dados do ERP salvos! Avance para **Fechar inventário**.")
+                    st.success(f"✅ Upload ERP documento {documento} adicionado!")
                     st.rerun()
 
             except Exception as e:
@@ -1156,14 +1180,25 @@ def render(df_jlle, df_outras, formatar_br):
                     <span style="color:#EC6E21;font-weight:bold;font-size:1.2rem;">{pct_ciclo:.1f}%</span>
                   </div></div>""", unsafe_allow_html=True)
 
-            # Carrega dados ERP
-            erp_fech = db_obter_erp_upload(engine_db, empresa_sel, filial_sel, num_ciclo_fech)
-            df_erp_fech = pd.DataFrame(erp_fech["dados"]) if erp_fech and erp_fech.get("dados") else pd.DataFrame()
+            # Carrega TODOS os uploads ERP do ciclo e consolida
+            erp_uploads_fech = db_obter_erp_uploads(engine_db, empresa_sel, filial_sel, num_ciclo_fech)
+            # Consolida todos os dados ERP em um único DataFrame
+            if erp_uploads_fech:
+                df_erp_fech = pd.concat(
+                    [pd.DataFrame(u["dados"]) for u in erp_uploads_fech if u.get("dados")],
+                    ignore_index=True
+                ) if erp_uploads_fech else pd.DataFrame()
+                # Remove duplicatas por código — mantém última ocorrência
+                if not df_erp_fech.empty and "Codigo" in df_erp_fech.columns:
+                    df_erp_fech = df_erp_fech.drop_duplicates(subset=["Codigo"], keep="last")
+            else:
+                df_erp_fech = pd.DataFrame()
 
             if df_erp_fech.empty:
                 st.warning("⚠️ Nenhum dado do ERP encontrado. Faça o **Upload ERP** (etapa 5) antes de fechar.")
             else:
-                st.success(f"✅ ERP carregado — {len(df_erp_fech)} produtos · Documento: **{erp_fech.get('documento','—')}**")
+                docs = ", ".join(u.get("documento","—") for u in erp_uploads_fech)
+                st.success(f"✅ {len(erp_uploads_fech)} upload(s) ERP · {len(df_erp_fech)} produtos · Documentos: **{docs}**")
 
             # Monta relatório final: direto do ERP Protheus (fonte da verdade)
             if not df_erp_fech.empty:
