@@ -605,7 +605,18 @@ def render(df_jlle, df_outras, formatar_br):
                ativo=(etapa_nav==2), concluido=(len(_uploads)>0), chave="ic_n2")
     b3 = _card(c3,3,"Add etapa",      "Confirma e acumula uploads",
                ativo=(etapa_nav==3), concluido=(pct_ciclo>=100), chave="ic_n3")
-    _conf_concluida = st.session_state.get(f"ic_conf_ok_{ciclo_ativo.get('num_ciclo','') if ciclo_ativo else ''}", False)
+    # Conferência concluída: 100% coberto OU há justificativas salvas no banco
+    _num_ciclo_ativo = ciclo_ativo.get("num_ciclo","") if ciclo_ativo else ""
+    _conf_concluida = False
+    if pct_ciclo >= 100 and ciclo_ativo:
+        _conf_concluida = True
+    elif _num_ciclo_ativo and empresa_sel and filial_sel:
+        try:
+            _justs_check = db_obter_justificativas(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo)
+            if _justs_check:
+                _conf_concluida = True
+        except:
+            pass
     b4 = _card(c4,4,"Conferência",    "Divergências e justificativas",
                ativo=(etapa_nav==4), concluido=_conf_concluida, chave="ic_n4")
     b5 = _card(c5,5,"Upload ERP",     "Importa relatório Protheus",
@@ -976,6 +987,7 @@ def render(df_jlle, df_outras, formatar_br):
 
         if df_div.empty:
             st.success("✅ Nenhuma divergência encontrada nos uploads realizados.")
+            st.session_state[f"ic_conf_ok_{num_ciclo_conf}"] = True
         else:
             st.info(f"**{len(df_div)} produto(s) com divergência** — adicione justificativas abaixo.")
 
@@ -1236,40 +1248,12 @@ def render(df_jlle, df_outras, formatar_br):
                         for u in _uploads: todos.update(str(p).strip().zfill(6) for p in u.get("produtos",[]))
                         data_iso = _uploads[-1].get("data_iso",date.today().isoformat()) if _uploads else date.today().isoformat()
                         pct_f    = len(todos & pl_ciclo)/len(pl_ciclo)*100 if pl_ciclo else 0
+
+                        # relatorio_json = dados WMS×ERP no formato padrão (coluna "Produto")
                         df_rel   = montar_df_relatorio(_uploads, df_filial)
-                        # Prioriza dados do ERP Protheus como fonte da verdade para o relatorio_json
-                        # Normaliza colunas do ERP para o formato esperado pelo PDF
-                        if not df_erp_fech.empty:
-                            _df_erp_norm = df_erp_fech.copy()
-                            _col_rename_erp = {
-                                "Codigo":        "Produto",
-                                "Descricao":     "Descrição",
-                                "Qtd WMS":       "Invent WMS",
-                                "Qtd ERP":       "Saldo ERP (Total)",
-                                "Divergencia Qtd":"Diferença Invent",
-                                "Divergencia Vl": "Vl Total Diferença",
-                            }
-                            _df_erp_norm = _df_erp_norm.rename(columns={k:v for k,v in _col_rename_erp.items() if k in _df_erp_norm.columns})
-                            if "Produto" in _df_erp_norm.columns:
-                                _df_erp_norm["Produto"] = _df_erp_norm["Produto"].astype(str).str.zfill(6)
-                            # Enriquece com Vl Unit/Vl Total ERP do df_filial quando disponível
-                            if not df_filial.empty and "Produto" in df_filial.columns and "Vl Unit" in df_filial.columns:
-                                _vl = df_filial[["Produto","Vl Unit"]].copy()
-                                _vl["Produto"] = _vl["Produto"].astype(str).str.zfill(6)
-                                _vl = _vl.drop_duplicates("Produto")
-                                _df_erp_norm = _df_erp_norm.merge(_vl, on="Produto", how="left")
-                                _df_erp_norm["Vl Unit"] = pd.to_numeric(_df_erp_norm["Vl Unit"], errors="coerce").fillna(0)
-                                saldo = pd.to_numeric(_df_erp_norm.get("Saldo ERP (Total)", 0), errors="coerce").fillna(0)
-                                _df_erp_norm["Vl Total ERP"] = saldo * _df_erp_norm["Vl Unit"]
-                            # Adiciona Acuracidade do último upload
-                            if "Acuracidade" not in _df_erp_norm.columns:
-                                _df_erp_norm["Acuracidade"] = _uploads[-1].get("acuracidade","—") if _uploads else "—"
-                            # Adiciona Saldo WMS se não existir
-                            if "Saldo WMS" not in _df_erp_norm.columns and "Invent WMS" in _df_erp_norm.columns:
-                                _df_erp_norm["Saldo WMS"] = _df_erp_norm["Invent WMS"]
-                            rel_json = _df_erp_norm.to_json(orient="records", force_ascii=False)
-                        else:
-                            rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
+                        rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
+
+                        # erp_json = dados brutos do Protheus (separado)
                         erp_json = df_erp_fech.to_json(orient="records", force_ascii=False) if not df_erp_fech.empty else "[]"
                         cf = {**ciclo_ativo,
                               "uploads":         _uploads,        # preserva lista completa para o PDF no histórico
