@@ -1284,12 +1284,16 @@ def render(df_jlle, df_outras, formatar_br):
         for c in ciclos:
             num_c    = c.get("num_ciclo","")
             rel_json = c.get("relatorio_json","[]")
+            prods_c  = {str(p).zfill(6) for p in c.get("produtos_contados", [])}
 
-            # Tenta 1: relatorio_json salvo no banco
+            # Tenta 1: relatorio_json salvo no banco — filtra só produtos inventariados
             df_c = pd.DataFrame()
             try:
                 if rel_json and rel_json not in ("[]", "", None):
                     df_c = pd.read_json(io.StringIO(rel_json), orient="records")
+                    # Se produtos_contados está disponível, restringe o relatório a eles
+                    if not df_c.empty and prods_c and "Produto" in df_c.columns:
+                        df_c = df_c[df_c["Produto"].astype(str).str.zfill(6).isin(prods_c)].copy()
             except Exception:
                 df_c = pd.DataFrame()
 
@@ -1305,16 +1309,15 @@ def render(df_jlle, df_outras, formatar_br):
                 if prods and "Produto" in df_filial.columns:
                     df_c = df_filial[df_filial["Produto"].astype(str).str.zfill(6).isin(prods)].copy()
                     if not df_c.empty:
-                        # Renomeia para formato padrão do relatório
-                        df_c = df_c.rename(columns={"Saldo ERP (Total)": "Saldo ERP (Total)"})
                         for col in ["Saldo WMS","Invent WMS","Diferença Invent","Vl Total Diferença"]:
                             if col not in df_c.columns:
                                 df_c[col] = 0
                         if "Acuracidade" not in df_c.columns:
                             df_c["Acuracidade"] = c.get("acuracidade","—")
                         if "Vl Total ERP" not in df_c.columns and "Vl Unit" in df_c.columns:
-                            df_c["Vl Total ERP"] = pd.to_numeric(df_c.get("Saldo ERP (Total)",0), errors="coerce").fillna(0) * \
-                                                   pd.to_numeric(df_c["Vl Unit"], errors="coerce").fillna(0)
+                            df_c["Vl Total ERP"] = (
+                                pd.to_numeric(df_c.get("Saldo ERP (Total)",0), errors="coerce").fillna(0) *
+                                pd.to_numeric(df_c["Vl Unit"], errors="coerce").fillna(0))
 
             dfs_rel_todos[num_c] = df_c
 
