@@ -528,6 +528,64 @@ def gerar_relatorio_kpmg_pdf(ciclos: list, label_unidade: str,
     buf.seek(0)
     return buf.getvalue()
 
+# ── Stepper ───────────────────────────────────────────────────────────────────
+
+def _render_stepper(etapa_ativa: int):
+    """Renderiza o stepper horizontal de 4 etapas."""
+    etapas = [
+        (1, "Gerar lista"),
+        (2, "Fazer inventário"),
+        (3, "Importar resultado"),
+        (4, "Fechar inventário"),
+    ]
+
+    def status(n):
+        if n < etapa_ativa:  return "done"
+        if n == etapa_ativa: return "active"
+        return "pending"
+
+    cor_done    = "#27AE60"
+    cor_active  = "#005562"
+    cor_pending = "var(--color-border-tertiary)"
+
+    # Monta HTML do stepper
+    items = []
+    for i, (n, label) in enumerate(etapas):
+        st = status(n)
+        icon  = "✓" if st == "done" else str(n)
+        after_color = cor_done if st == "done" else cor_active if st == "active" else "var(--color-border-tertiary)"
+        circle_bg   = cor_done if st == "done" else cor_active if st == "active" else "var(--color-background-primary, #fff)"
+        circle_col  = "#fff" if st in ("done","active") else "var(--color-text-secondary)"
+        circle_bord = cor_done if st == "done" else cor_active if st == "active" else "var(--color-border-tertiary)"
+        label_col   = cor_done if st == "done" else cor_active if st == "active" else "var(--color-text-secondary)"
+        badge_bg    = "#E8F5E9" if st == "done" else "#E1F5EE" if st == "active" else "var(--color-background-secondary)"
+        badge_col   = "#27500A" if st == "done" else "#085041" if st == "active" else "var(--color-text-tertiary)"
+        badge_txt   = "✓ Concluído" if st == "done" else "Em andamento" if st == "active" else "Pendente"
+        connector   = f'<div style="flex:1;height:2px;background:{cor_done if st=="done" else "var(--color-border-tertiary)"};margin-top:18px;"></div>' if i < len(etapas)-1 else ""
+
+        items.append(f"""
+        <div style="display:flex;flex-direction:column;align-items:center;flex:1;">
+          <div style="width:36px;height:36px;border-radius:50%;background:{circle_bg};
+                      border:2px solid {circle_bord};display:flex;align-items:center;
+                      justify-content:center;font-weight:500;font-size:14px;
+                      color:{circle_col};z-index:1;">{icon}</div>
+          <div style="margin-top:6px;font-size:12px;font-weight:500;color:{label_col};
+                      text-align:center;max-width:90px;line-height:1.3;">{label}</div>
+          <div style="margin-top:4px;font-size:11px;padding:2px 8px;border-radius:20px;
+                      background:{badge_bg};color:{badge_col};">{badge_txt}</div>
+        </div>
+        {connector}
+        """)
+
+    st.markdown(
+        f"""<div style="display:flex;align-items:flex-start;gap:0;padding:1rem 0 0.5rem;">
+            {"".join(items)}
+        </div>""",
+        unsafe_allow_html=True
+    )
+    st.markdown("<hr style='margin:0.5rem 0 1.5rem;opacity:0.2;'>", unsafe_allow_html=True)
+
+
 # ── Render ────────────────────────────────────────────────────────────────────
 
 def render(df_jlle, df_outras, formatar_br):
@@ -563,6 +621,9 @@ def render(df_jlle, df_outras, formatar_br):
     contados    = db_obter_contados(engine_db, empresa_sel, filial_sel)
     ciclos      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
     ciclo_ativo = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+
+    # Determina etapa ativa para o stepper (calculado após métricas)
+    _uploads_ciclo = ciclo_ativo.get("uploads", []) if ciclo_ativo else []
 
     df_score   = calcular_score(df_filial, contados)
     total_skus = len(df_score)
@@ -688,11 +749,14 @@ def render(df_jlle, df_outras, formatar_br):
 
     # Upload do resultado WMS direto aqui
     st.markdown("---")
-    # Recarrega ciclo ativo e progresso
-    ciclo_ativo = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
-    uploads_anteriores = ciclo_ativo.get("uploads", []) if ciclo_ativo else []
-    ja_contados_ciclo  = produtos_contados_no_ciclo(engine_db, empresa_sel, filial_sel)
-    lista_atual        = ciclo_ativo or {}
+    # Recarrega ciclo ativo DIRETAMENTE do banco para garantir dados frescos
+    ciclo_ativo_fresh  = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+    uploads_anteriores = ciclo_ativo_fresh.get("uploads", []) if ciclo_ativo_fresh else []
+    # Calcula produtos contados a partir dos uploads frescos
+    ja_contados_ciclo  = set()
+    for u in uploads_anteriores:
+        ja_contados_ciclo.update(str(p).strip().zfill(6) for p in u.get("produtos", []))
+    lista_atual = ciclo_ativo_fresh or {}
     produtos_lista     = set(lista_atual.get("produtos_lista", []))
     # Normaliza zeros à esquerda para garantir comparação correta
     produtos_lista    = {str(p).strip().zfill(6) for p in produtos_lista}
