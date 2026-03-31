@@ -8,7 +8,7 @@ from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, b
 from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
-from tabs import joinville, filiais, indicadores, inventario_ciclico
+from tabs import joinville, indicadores, inventario_ciclico
 
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
@@ -219,27 +219,10 @@ with c2: f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite
 dff = df_base if f_stat == "Todos" else df_base[df_base["Status"] == f_stat]
 if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
 
-# Separação Joinville x Outras Filiais
-lista_joinville = ["Tools - Filial", "Maquinas - Filial", "Service - Matriz", "Service - Filial"]
-lista_outras    = ["Tools - Matriz", "Maquinas - Matriz", "Maquinas - Jundiai",
-                   "Robotica - Matriz", "Robotica - Jaragua", "Service - Caxias", "Service - Jundiai"]
-
-dff_jlle   = dff[dff["Filial"].isin(lista_joinville)].copy()
-dff_outras = dff[dff["Filial"].isin(lista_outras)].copy()
-dff_jlle["Filial"]   = dff_jlle["Filial"].str.split(" - ").str[-1]
-dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
-
-# Fallback: se filial não bate com as listas (ex: dado sem prefixo), usa dff completo
-if dff_jlle.empty and dff_outras.empty:
-    sufixo = filial_sel.split(" - ")[-1]
-    sufixos_jlle  = {f.split(" - ")[-1] for f in lista_joinville}
-    sufixos_outras = {f.split(" - ")[-1] for f in lista_outras}
-    if sufixo in sufixos_jlle:
-        dff_jlle   = dff.copy()
-        dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
-    elif sufixo in sufixos_outras:
-        dff_outras = dff.copy()
-        dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
+# Usa todos os dados da filial selecionada diretamente
+dff_jlle = dff.copy()
+dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
+dff_outras = pd.DataFrame()  # não usado mais
 
 def preparar_view(df):
     if df.empty: return df
@@ -270,13 +253,11 @@ st.session_state["_estilizar_func"]  = estilizar_tabela
 st.session_state["_to_float_func"]   = to_float_br
 st.session_state["_tratar_df"]       = _tratar_mov
 
-tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🔄 Inv. Cíclico"])
+tab1, tab2, tab3 = st.tabs(["📋 Auditoria", "📊 Indicadores", "🔄 Inv. Cíclico"])
 
 with tab1:
     joinville.render(v_jlle_view, estilizar_tabela, para_excel)
 with tab2:
-    filiais.render(v_outras_view, estilizar_tabela, para_excel)
-with tab3:
     indicadores.render(dff_jlle, formatar_br)
-with tab4:
+with tab3:
     inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)
