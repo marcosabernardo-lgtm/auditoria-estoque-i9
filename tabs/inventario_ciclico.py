@@ -698,14 +698,7 @@ def render(df_jlle, df_outras, formatar_br):
     faltam            = produtos_lista - ja_contados_ciclo
     pct_ciclo         = len(ja_contados_ciclo & produtos_lista) / len(produtos_lista) * 100 if produtos_lista else 0
 
-    # DEBUG temporário
-    with st.expander("🔍 Debug — comparação de produtos"):
-        st.write("**Produtos na lista:**", sorted(produtos_lista))
-        st.write("**Produtos contados no ciclo:**", sorted(ja_contados_ciclo))
-        st.write("**Faltam:**", sorted(faltam))
-        st.write("**% cobertura:**", pct_ciclo)
-        st.write("**ciclo_ativo:**", ciclo_ativo)
-        st.write("**uploads_anteriores:**", uploads_anteriores)
+
     cor_prog           = "#27AE60" if pct_ciclo >= 100 else "#EC6E21"
 
     st.markdown("---")
@@ -799,26 +792,15 @@ def render(df_jlle, df_outras, formatar_br):
                         "acuracidade": res.get("acuracidade","—"),
                         "produtos":    list(produtos_lista & produtos_wms),
                     }
-                    st.write("DEBUG — produtos a gravar:", upload_data["produtos"])
-                    # Testa UPDATE direto
-                    import json as _json
-                    from sqlalchemy import text as _text
-                    try:
-                        with engine_db.connect() as _conn:
-                            _result = _conn.execute(_text("""
-                                UPDATE inventario_ciclo_ativo
-                                SET uploads_json = :v
-                                WHERE empresa = :e AND filial = :f
-                            """), {"v": _json.dumps([upload_data]), "e": empresa_sel, "f": filial_sel})
-                            _conn.commit()
-                            st.write(f"DEBUG — rows afetadas: {_result.rowcount}")
-                    except Exception as _ue:
-                        st.error(f"DEBUG — UPDATE direto falhou: {_ue}")
-                    # Verifica se gravou
-                    ciclo_check = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
-                    st.write("DEBUG — uploads após UPDATE:", ciclo_check.get("uploads") if ciclo_check else "None")
+                    with engine_db.connect() as conn:
+                        conn.execute(text("""
+                            UPDATE inventario_ciclo_ativo
+                            SET uploads_json = :v, atualizado_em = NOW()
+                            WHERE empresa = :e AND filial = :f
+                        """), {"v": json.dumps([upload_data]), "e": empresa_sel, "f": filial_sel})
+                        conn.commit()
                     st.success(f"Etapa adicionada! {len(novos_desta_etapa)} novos produtos contados.")
-                    # st.rerun()  # TEMPORARIAMENTE DESABILITADO PARA DEBUG
+                    st.rerun()
                 except Exception as _err:
                     st.error(f"ERRO ao adicionar etapa: {_err}")
 
