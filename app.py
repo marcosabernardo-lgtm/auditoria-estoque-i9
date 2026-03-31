@@ -62,10 +62,11 @@ def estilizar_tabela(df):
 def get_engine():
     try:
         from sqlalchemy.pool import NullPool
-        return create_engine(
-            st.secrets["connections"]["postgresql"]["url"],
-            poolclass=NullPool,  # Sem pool — cada operação usa conexão direta
-        )
+        url = st.secrets["connections"]["postgresql"]["url"]
+        # Streamlit Cloud não suporta IPv6 — usa pooler na porta 5432 (modo session)
+        # Troca porta 6543 (transaction mode) por 5432 (session mode) no pooler
+        url = url.replace(":6543/", ":5432/")
+        return create_engine(url, poolclass=NullPool)
     except: return None
 
 def carregar_do_banco(tabela):
