@@ -222,7 +222,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     dfs_rel    : dict {num_ciclo: df_relatorio}
     """
     try:
-        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.pagesizes import A4, landscape
         from reportlab.lib import colors
         from reportlab.lib.units import cm
         from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
@@ -233,7 +233,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         return None
 
     buf    = io.BytesIO()
-    doc    = SimpleDocTemplate(buf, pagesize=A4,
+    doc    = SimpleDocTemplate(buf, pagesize=landscape(A4),
                                leftMargin=1.5*cm, rightMargin=1.5*cm,
                                topMargin=2*cm, bottomMargin=2*cm)
 
@@ -268,7 +268,9 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
 
     elems = []
     hoje  = date.today().strftime("%d/%m/%Y")
-    label_unidade = f"{empresa} — {filial}"
+    # Evita duplicar prefixo: "Service — Service - Matriz" → "Service — Matriz"
+    _fil_display = filial.split(" - ")[-1] if " - " in filial else filial
+    label_unidade = f"{empresa} — {_fil_display}"
 
     # Datas do período
     datas = [c.get("data","") for c in ciclos_sel if c.get("data","") not in ("","—")]
@@ -409,7 +411,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
             elems.append(Paragraph(f"Produtos inventariados ({n_sku})", sty("pi", fontSize=9, textColor=C_TEAL, fontName="Helvetica-Bold", spaceBefore=4, spaceAfter=4)))
             headers  = ["Código","Descrição","Saldo ERP","Saldo WMS","Inventariado","Diferença","Acuracidade","Vl Total ERP","Vl Total Dif."]
             col_keys = ["Produto","Descrição","Saldo ERP (Total)","Saldo WMS","Invent WMS","Diferença Invent","Acuracidade","Vl Total ERP","Vl Total Diferença"]
-            col_w    = [1.6*cm, 5.5*cm, 1.8*cm, 1.8*cm, 2*cm, 1.8*cm, 2.2*cm, 2.8*cm, 2.8*cm]
+            col_w    = [1.8*cm, 6.0*cm, 1.8*cm, 1.8*cm, 1.8*cm, 1.8*cm, 2.0*cm, 3.2*cm, 3.2*cm]
 
             tbl_data = [[Paragraph(h, s_cellh) for h in headers]]
             for _, row in df_rel.iterrows():

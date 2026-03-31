@@ -181,7 +181,11 @@ if not st.session_state.get("_app_empresa"):
         )
         emp_input = st.selectbox("🏢 Empresa", empresas, key="sel_empresa")
         filiais_disp = mapa_filiais.get(emp_input, [])
-        fil_input = st.selectbox("📍 Filial", filiais_disp, key="sel_filial")
+        # Mostra só o sufixo no dropdown (ex: "Matriz" em vez de "Service - Matriz")
+        filiais_labels = [f.split(" - ")[-1] if " - " in f else f for f in filiais_disp]
+        fil_label = st.selectbox("📍 Filial", filiais_labels, key="sel_filial")
+        # Recupera o nome completo correspondente ao label selecionado
+        fil_input = filiais_disp[filiais_labels.index(fil_label)] if fil_label in filiais_labels else fil_label
 
         if st.button("▶  Entrar", type="primary", use_container_width=True, key="btn_entrar"):
             st.session_state["_app_empresa"]    = emp_input
