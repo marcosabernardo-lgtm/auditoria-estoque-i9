@@ -551,8 +551,16 @@ def render(df_jlle, df_outras, formatar_br):
         ciclos      = st.session_state.get(f"{_cache_key}_ciclos", [])
         ciclo_ativo = st.session_state.get(f"{_cache_key}_ciclo_ativo")
         label       = f"{empresa_sel} — {filial_sel}"
-        df_filial   = df_jlle[(df_jlle["Empresa"]==empresa_sel)&(df_jlle["Filial"]==filial_sel)].copy()
-        # df_filial vazio = empresa/filial sem sufixo — usa df_jlle inteiro
+        # filial_sel pode ser "Service - Matriz" (nome completo do banco)
+        # df_jlle já tem Filial como sufixo ("Matriz") e Empresa como prefixo ("Service")
+        _fil_sufixo = filial_sel.split(" - ")[-1] if " - " in filial_sel else filial_sel
+        _emp_prefixo = empresa_sel.split(" - ")[0] if " - " in empresa_sel else empresa_sel
+        df_filial = df_jlle[
+            (df_jlle["Filial"] == _fil_sufixo) |
+            (df_jlle["Empresa"].str.contains(_emp_prefixo, case=False, na=False) &
+             (df_jlle["Filial"] == _fil_sufixo))
+        ].copy()
+        # Fallback: usa df_jlle inteiro se ainda vazio
         if df_filial.empty:
             df_filial = df_jlle.copy()
     else:
@@ -1006,7 +1014,13 @@ def render(df_jlle, df_outras, formatar_br):
         st.caption("☑️ Selecione um ou mais ciclos para gerar o PDF. Ao selecionar mais de um, o relatório será consolidado.")
 
         # Monta dfs_rel para cada ciclo (necessário para o PDF)
+        # Limpa caches de PDF antigos que possam ter ficado como None
         dfs_rel_todos = {}
+        for c in ciclos:
+            num_c    = c.get("num_ciclo","")
+            # Limpa cache se o valor era None (dados não estavam prontos antes)
+            if st.session_state.get(f"_pdf5_bytes_{num_c}") is None:
+                st.session_state.pop(f"_pdf5_bytes_{num_c}", None)
         for c in ciclos:
             num_c    = c.get("num_ciclo","")
             rel_json = c.get("relatorio_json","[]")
@@ -1069,8 +1083,8 @@ def render(df_jlle, df_outras, formatar_br):
                     mime="application/pdf",
                     key=f"dl5_{num_c}",
                     help=f"Baixar PDF — {num_c}")
-            else:
-                cpdf.caption("—")
+            elif pdf_pronto is None:
+                cpdf.caption("⚠️ sem dados")
 
             if checked:
                 sel_ciclos.append(c)
