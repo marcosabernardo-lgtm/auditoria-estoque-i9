@@ -170,30 +170,33 @@ def montar_df_relatorio(uploads, df_filial):
 
     df_wms_all = pd.DataFrame(rows)
     df_wms_all["Codigo"] = df_wms_all["Codigo"].astype(str).str.zfill(6)
-    for col in ["Qtd Antes","Qtd Depois","Qtd Diferença"]:
+    # Suporta tanto nomes antigos (Qtd Antes/Depois) quanto novos (Saldo WMS/Invent WMS)
+    if "Saldo WMS" not in df_wms_all.columns and "Qtd Antes" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Qtd Antes":"Saldo WMS","Qtd Depois":"Invent WMS"})
+    for col in ["Saldo WMS","Invent WMS"]:
         if col in df_wms_all.columns:
             df_wms_all[col] = pd.to_numeric(df_wms_all[col], errors="coerce").fillna(0)
     # Última ocorrência por produto
     df_wms_ult = df_wms_all.drop_duplicates(subset=["Codigo"], keep="last")
 
     # Join ERP × WMS
+    merge_cols = ["Codigo"] + [c for c in ["Saldo WMS","Invent WMS","Acuracidade"] if c in df_wms_ult.columns]
     df_rel = df_erp.merge(
-        df_wms_ult[["Codigo","Qtd Antes","Qtd Depois","Acuracidade"]].rename(columns={"Codigo":"Produto"}),
+        df_wms_ult[merge_cols].rename(columns={"Codigo":"Produto"}),
         on="Produto", how="left"
     )
-    df_rel["Qtd Antes"]    = df_rel["Qtd Antes"].fillna(0)
-    df_rel["Qtd Depois"]   = df_rel["Qtd Depois"].fillna(0)
-    df_rel["Acuracidade"]  = df_rel["Acuracidade"].fillna("—")
+    df_rel["Saldo WMS"]   = df_rel.get("Saldo WMS",  pd.Series(0, index=df_rel.index)).fillna(0)
+    df_rel["Invent WMS"]  = df_rel.get("Invent WMS", pd.Series(0, index=df_rel.index)).fillna(0)
+    df_rel["Acuracidade"] = df_rel.get("Acuracidade", pd.Series("—", index=df_rel.index)).fillna("—")
 
-    saldo_erp = df_rel.get("Saldo ERP (Total)", pd.Series(0, index=df_rel.index)).fillna(0) \
+    saldo_erp = pd.to_numeric(df_rel["Saldo ERP (Total)"], errors="coerce").fillna(0) \
                 if "Saldo ERP (Total)" in df_rel.columns else pd.Series(0, index=df_rel.index)
-    vl_unit   = df_rel.get("Vl Unit", pd.Series(0, index=df_rel.index)).fillna(0) \
+    vl_unit   = pd.to_numeric(df_rel["Vl Unit"], errors="coerce").fillna(0) \
                 if "Vl Unit" in df_rel.columns else pd.Series(0, index=df_rel.index)
 
-    df_rel["Saldo WMS"]          = df_rel["Qtd Antes"]
-    df_rel["Invent WMS"]         = df_rel["Qtd Depois"]
     df_rel["Diferença Invent"]   = saldo_erp - df_rel["Invent WMS"]
-    df_rel["Vl Total ERP"]       = df_rel.get("Vl Total ERP", saldo_erp * vl_unit)
+    if "Vl Total ERP" not in df_rel.columns:
+        df_rel["Vl Total ERP"]   = saldo_erp * vl_unit
     df_rel["Vl Total Diferença"] = df_rel["Diferença Invent"] * vl_unit
 
     cols_saida = [c for c in [
@@ -604,38 +607,71 @@ def render(df_jlle, df_outras, formatar_br):
                     _erp = _erp.groupby("Produto", as_index=False).sum()
                     erp_lookup = _erp.set_index("Produto").to_dict("index")
 
-                df_wms["Saldo ERP"]        = df_wms["Codigo"].map(lambda p: erp_lookup.get(p, {}).get("Saldo ERP (Total)", 0))
-                df_wms["Vl Unit"]          = df_wms["Codigo"].map(lambda p: erp_lookup.get(p, {}).get("Vl Unit", 0))
-                df_wms["Invent WMS"]       = pd.to_numeric(df_wms["Qtd Depois"], errors="coerce").fillna(0)
-                df_wms["Diferença Invent"] = df_wms["Saldo ERP"] - df_wms["Invent WMS"]
-                df_wms["Vl Total ERP"]     = df_wms["Saldo ERP"] * df_wms["Vl Unit"]
-                df_wms["Vl Total Dif."]    = df_wms["Diferença Invent"] * df_wms["Vl Unit"]
+                df_wms["Saldo ERP (Total)"] = df_wms["Codigo"].map(lambda p: erp_lookup.get(p, {}).get("Saldo ERP (Total)", 0))
+                df_wms["Vl Unit"]           = df_wms["Codigo"].map(lambda p: erp_lookup.get(p, {}).get("Vl Unit", 0))
+                df_wms["Saldo WMS"]         = pd.to_numeric(df_wms["Qtd Antes"],  errors="coerce").fillna(0)
+                df_wms["Invent WMS"]        = pd.to_numeric(df_wms["Qtd Depois"], errors="coerce").fillna(0)
+                df_wms["Diferença Invent"]  = df_wms["Saldo ERP (Total)"] - df_wms["Invent WMS"]
+                df_wms["Vl Total ERP"]      = df_wms["Saldo ERP (Total)"] * df_wms["Vl Unit"]
+                df_wms["Vl Total Dif."]     = df_wms["Diferença Invent"]  * df_wms["Vl Unit"]
 
-                cols_exib = ["Codigo","Descricao","Saldo ERP","Qtd Antes","Invent WMS",
-                             "Diferença Invent","Acuracidade","Vl Total ERP","Vl Total Dif.","Status"]
-                cols_exib = [c for c in cols_exib if c in df_wms.columns]
+                # Monta df de exibição com nomes e ordem exatos pedidos
+                df_exib_wms = df_wms[["Codigo","Descricao",
+                    "Saldo ERP (Total)","Saldo WMS","Invent WMS",
+                    "Diferença Invent","Acuracidade",
+                    "Vl Total ERP","Vl Total Dif.","Status"]].copy()
+                df_exib_wms = df_exib_wms.rename(columns={
+                    "Saldo ERP (Total)": "Saldo ERP",
+                    "Vl Total Dif.":     "Vl Total Diferença"
+                })
 
                 def _style_dif(val):
                     try:
-                        v = float(val)
-                        if v > 0:  return "color:#C0392B;font-weight:bold"
-                        if v < 0:  return "color:#27AE60;font-weight:bold"
+                        v = float(str(val).replace("R$","").replace(",","").replace(" ",""))
+                        if v > 0: return "color:#C0392B;font-weight:bold"
+                        if v < 0: return "color:#27AE60;font-weight:bold"
                     except: pass
                     return ""
 
                 st.dataframe(
-                    df_wms[cols_exib].style
-                    .applymap(_style_dif, subset=["Diferença Invent","Vl Total Dif."])
+                    df_exib_wms.style
+                    .applymap(_style_dif, subset=["Diferença Invent","Vl Total Diferença"])
                     .format({
-                        "Saldo ERP":"{:,.2f}", "Qtd Antes":"{:,.2f}",
-                        "Invent WMS":"{:,.2f}", "Diferença Invent":"{:,.2f}",
-                        "Vl Total ERP":"R$ {:,.2f}", "Vl Total Dif.":"R$ {:,.2f}"
+                        "Saldo ERP":       "{:,.2f}",
+                        "Saldo WMS":       "{:,.2f}",
+                        "Invent WMS":      "{:,.2f}",
+                        "Diferença Invent":"{:,.2f}",
+                        "Vl Total ERP":    "R$ {:,.2f}",
+                        "Vl Total Diferença": "R$ {:,.2f}"
                     }, na_rep="—"),
                     use_container_width=True, hide_index=True)
 
-                # Salva linhas para o relatório PDF
+                # Preview PDF do upload atual
+                _up_prev = {
+                    "num_ciclo": ciclo_ativo.get("num_ciclo","—"),
+                    "data_geracao": ciclo_ativo.get("data_geracao","—"),
+                    "data": res.get("data","—"),
+                    "responsavel": res.get("responsavel","—"),
+                    "acuracidade": res.get("acuracidade","—"),
+                    "cobertura_pct": pct_ciclo,
+                }
+                _df_prev = df_exib_wms.rename(columns={
+                    "Saldo ERP":        "Saldo ERP (Total)",
+                    "Vl Total Diferença":"Vl Total Diferença",
+                }).copy()
+                _pdf_prev = gerar_pdf_kpmg(_up_prev, _df_prev, empresa_sel, filial_sel)
+                if _pdf_prev:
+                    st.download_button(
+                        "📄 Baixar PDF desta etapa",
+                        data=_pdf_prev,
+                        file_name=f"kpmg_etapa_{res.get('num_inv','')}.pdf",
+                        mime="application/pdf",
+                        key="ic_pdf_etapa"
+                    )
+
+                # Salva linhas para o relatório PDF (com nomes padronizados)
                 df_rows_save = df_wms[["Codigo","Descricao","Qtd Antes","Qtd Depois","Acuracidade"]].copy()
-                df_rows_save.columns = ["Codigo","Descricao","Qtd Antes","Qtd Depois","Acuracidade"]
+                df_rows_save = df_rows_save.rename(columns={"Qtd Antes":"Saldo WMS","Qtd Depois":"Invent WMS"})
 
                 st.session_state["ic_upload_pendente"] = {
                     "num_inv":res.get("num_inv","—"),"data":res.get("data","—"),
@@ -720,6 +756,24 @@ def render(df_jlle, df_outras, formatar_br):
 
             if pct_ciclo >= 100:
                 st.success("✅ 100% dos itens contados! Pronto para fechar.")
+                # Preview do relatório antes de fechar
+                _df_prev4 = montar_df_relatorio(_uploads, df_filial)
+                if not _df_prev4.empty:
+                    _pdf_prev4 = gerar_pdf_kpmg(
+                        {**ciclo_ativo,
+                         "data": _uploads[-1].get("data","—") if _uploads else "—",
+                         "responsavel": _uploads[-1].get("responsavel","—") if _uploads else "—",
+                         "acuracidade": _uploads[-1].get("acuracidade","—") if _uploads else "—",
+                         "cobertura_pct": pct_ciclo},
+                        _df_prev4, empresa_sel, filial_sel)
+                    if _pdf_prev4:
+                        st.download_button(
+                            "📄 Pré-visualizar Relatório PDF",
+                            data=_pdf_prev4,
+                            file_name=f"kpmg_preview_{ciclo_ativo.get('num_ciclo','')}.pdf",
+                            mime="application/pdf",
+                            key="ic_pdf_preview4"
+                        )
                 if st.button("🏁 Fechar inventário", key="ic_fechar", type="primary"):
                     todos = set()
                     for u in _uploads: todos.update(str(p).strip().zfill(6) for p in u.get("produtos",[]))
