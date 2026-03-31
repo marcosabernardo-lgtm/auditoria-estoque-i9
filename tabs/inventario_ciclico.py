@@ -45,7 +45,9 @@ def processar_resultado_wms(arquivo):
     return meta
 
 
-def calcular_score(df, contados):
+@st.cache_data(ttl=300, show_spinner=False)
+def calcular_score(df, contados_tuple):
+    contados = dict(contados_tuple)
     df = df.copy()
     for col in ["Saldo ERP (Total)","Saldo WMS","Vl Unit","Vl Total ERP","Divergência"]:
         if col in df.columns:
@@ -183,14 +185,23 @@ def render(df_jlle, df_outras, formatar_br):
         st.warning(f"Sem dados para **{label}**."); return
 
     engine_db   = st.session_state.get("_engine")
-    contados    = db_obter_contados(engine_db, empresa_sel, filial_sel)
-    ciclos      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
-    ciclo_ativo = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+    # Cache leve de 5s para evitar releituras repetidas do banco
+    _cache_key = f"ic_cache_{empresa_sel}_{filial_sel}"
+    if st.session_state.get(f"{_cache_key}_ts", 0) < __import__('time').time() - 5 or        st.session_state.get("ic_force_reload", False):
+        st.session_state[f"{_cache_key}_contados"]    = db_obter_contados(engine_db, empresa_sel, filial_sel)
+        st.session_state[f"{_cache_key}_ciclos"]      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
+        st.session_state[f"{_cache_key}_ciclo_ativo"] = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+        st.session_state[f"{_cache_key}_ts"]          = __import__('time').time()
+        st.session_state.pop("ic_force_reload", None)
+
+    contados    = st.session_state.get(f"{_cache_key}_contados", {})
+    ciclos      = st.session_state.get(f"{_cache_key}_ciclos", [])
+    ciclo_ativo = st.session_state.get(f"{_cache_key}_ciclo_ativo")
 
     if st.session_state.pop("ic_fechado_msg", False):
         st.success("✅ Inventário fechado e registrado no histórico KPMG!")
 
-    df_score   = calcular_score(df_filial, contados)
+    df_score   = calcular_score(df_filial, tuple(sorted(contados.items())))
     total_skus = len(df_score)
     total_cont = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
     pct_cob    = (total_cont/total_skus*100) if total_skus>0 else 0
@@ -401,6 +412,7 @@ def render(df_jlle, df_outras, formatar_br):
                         """), {"v":json.dumps(ups_at),"e":empresa_sel,"f":filial_sel})
                         conn.commit()
                     del st.session_state["ic_upload_pendente"]
+                    st.session_state["ic_force_reload"]=True
                     st.success(f"✅ Etapa adicionada! {len(up['produtos'])} produtos contados.")
                     st.rerun()
                 except Exception as err:
@@ -440,6 +452,7 @@ def render(df_jlle, df_outras, formatar_br):
                     db_fechar_ciclo_ativo(engine_db,empresa_sel,filial_sel)
                     st.session_state["ic_fechado_msg"]=True
                     st.session_state["ic_etapa_nav"]=1
+                    st.session_state["ic_force_reload"]=True
                     st.rerun()
             else:
                 col_bt,col_ms = st.columns([1,3])
