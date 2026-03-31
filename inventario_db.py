@@ -1,6 +1,7 @@
 """
 inventario_db.py — Persistência do Inventário Cíclico no Supabase.
 Engine é passada como parâmetro em todas as funções.
+Usa engine.connect() + conn.commit() explícito para compatibilidade com Supabase.
 """
 import json
 import logging
@@ -17,18 +18,20 @@ def db_obter_contados(engine, empresa, filial):
     try:
         with engine.connect() as conn:
             rows = conn.execute(text(
-                "SELECT produto, data_contagem FROM inventario_contados WHERE empresa=:e AND filial=:f"
+                "SELECT produto, data_contagem FROM inventario_contados "
+                "WHERE empresa=:e AND filial=:f"
             ), {"e": empresa, "f": filial}).fetchall()
         return {r[0]: r[1] for r in rows}
     except Exception as ex:
         logger.warning("db_obter_contados: %s", ex)
         return {}
 
+
 def db_marcar_contados(engine, empresa, filial, produtos, data=None, num_ciclo=None):
     if engine is None or not produtos: return
     data_reg = data or date.today().isoformat()
     try:
-        with engine.begin() as conn:
+        with engine.connect() as conn:
             for p in produtos:
                 conn.execute(text("""
                     INSERT INTO inventario_contados (empresa, filial, produto, data_contagem, num_ciclo)
@@ -36,15 +39,19 @@ def db_marcar_contados(engine, empresa, filial, produtos, data=None, num_ciclo=N
                     ON CONFLICT (empresa, filial, produto)
                     DO UPDATE SET data_contagem=EXCLUDED.data_contagem, num_ciclo=EXCLUDED.num_ciclo
                 """), {"e":empresa,"f":filial,"p":str(p),"d":data_reg,"c":num_ciclo or ""})
+            conn.commit()
     except Exception as ex:
         logger.warning("db_marcar_contados: %s", ex)
+
 
 def db_resetar_contados(engine, empresa, filial):
     if engine is None: return
     try:
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM inventario_contados WHERE empresa=:e AND filial=:f"),
-                         {"e":empresa,"f":filial})
+        with engine.connect() as conn:
+            conn.execute(text(
+                "DELETE FROM inventario_contados WHERE empresa=:e AND filial=:f"
+            ), {"e":empresa,"f":filial})
+            conn.commit()
     except Exception as ex:
         logger.warning("db_resetar_contados: %s", ex)
 
@@ -71,10 +78,11 @@ def db_obter_ciclos(engine, empresa, filial):
         logger.warning("db_obter_ciclos: %s", ex)
         return []
 
+
 def db_gravar_ciclo(engine, empresa, filial, ciclo):
     if engine is None: return
     try:
-        with engine.begin() as conn:
+        with engine.connect() as conn:
             conn.execute(text("""
                 INSERT INTO inventario_ciclos
                     (empresa,filial,num_ciclo,data_geracao,data_contagem,responsavel,
@@ -96,15 +104,19 @@ def db_gravar_ciclo(engine, empresa, filial, ciclo):
                 "status":ciclo.get("status","Concluído"),
                 "uploads":ciclo.get("uploads",1),
             })
+            conn.commit()
     except Exception as ex:
         logger.warning("db_gravar_ciclo: %s", ex)
+
 
 def db_resetar_ciclos(engine, empresa, filial):
     if engine is None: return
     try:
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM inventario_ciclos WHERE empresa=:e AND filial=:f"),
-                         {"e":empresa,"f":filial})
+        with engine.connect() as conn:
+            conn.execute(text(
+                "DELETE FROM inventario_ciclos WHERE empresa=:e AND filial=:f"
+            ), {"e":empresa,"f":filial})
+            conn.commit()
     except Exception as ex:
         logger.warning("db_resetar_ciclos: %s", ex)
 
@@ -117,21 +129,28 @@ def db_obter_ciclo_ativo(engine, empresa, filial):
         with engine.connect() as conn:
             row = conn.execute(text("""
                 SELECT num_ciclo,data_geracao,qtd_lista,produtos_lista,uploads_json,status
-                FROM inventario_ciclo_ativo WHERE empresa=:e AND filial=:f LIMIT 1
+                FROM inventario_ciclo_ativo
+                WHERE empresa=:e AND filial=:f LIMIT 1
             """), {"e":empresa,"f":filial}).fetchone()
         if row is None: return None
-        return {"num_ciclo":row[0],"data_geracao":row[1],"qtd_lista":row[2],
-                "produtos_lista":json.loads(row[3] or "[]"),
-                "uploads":json.loads(row[4] or "[]"),
-                "status":row[5],"label":f"{empresa} — {filial}"}
+        return {
+            "num_ciclo":      row[0],
+            "data_geracao":   row[1],
+            "qtd_lista":      row[2],
+            "produtos_lista": json.loads(row[3] or "[]"),
+            "uploads":        json.loads(row[4] or "[]"),
+            "status":         row[5],
+            "label":          f"{empresa} — {filial}",
+        }
     except Exception as ex:
         logger.warning("db_obter_ciclo_ativo: %s", ex)
         return None
 
+
 def db_salvar_ciclo_ativo(engine, empresa, filial, ciclo):
     if engine is None: return
     try:
-        with engine.begin() as conn:
+        with engine.connect() as conn:
             conn.execute(text("""
                 INSERT INTO inventario_ciclo_ativo
                     (empresa,filial,num_ciclo,data_geracao,qtd_lista,
@@ -139,54 +158,62 @@ def db_salvar_ciclo_ativo(engine, empresa, filial, ciclo):
                 VALUES (:e,:f,:num_ciclo,:data_geracao,:qtd_lista,
                         :produtos_lista,:uploads_json,:status,NOW())
                 ON CONFLICT (empresa,filial) DO UPDATE SET
-                    num_ciclo=EXCLUDED.num_ciclo, data_geracao=EXCLUDED.data_geracao,
-                    qtd_lista=EXCLUDED.qtd_lista, produtos_lista=EXCLUDED.produtos_lista,
-                    uploads_json=EXCLUDED.uploads_json, status=EXCLUDED.status,
+                    num_ciclo=EXCLUDED.num_ciclo,
+                    data_geracao=EXCLUDED.data_geracao,
+                    qtd_lista=EXCLUDED.qtd_lista,
+                    produtos_lista=EXCLUDED.produtos_lista,
+                    uploads_json=EXCLUDED.uploads_json,
+                    status=EXCLUDED.status,
                     atualizado_em=NOW()
             """), {
                 "e":empresa,"f":filial,
-                "num_ciclo":ciclo.get("num_ciclo",""),
-                "data_geracao":ciclo.get("data_geracao",""),
-                "qtd_lista":ciclo.get("qtd_lista",0),
+                "num_ciclo":     ciclo.get("num_ciclo",""),
+                "data_geracao":  ciclo.get("data_geracao",""),
+                "qtd_lista":     ciclo.get("qtd_lista",0),
                 "produtos_lista":json.dumps(ciclo.get("produtos_lista",[])),
-                "uploads_json":json.dumps(ciclo.get("uploads",[])),
-                "status":ciclo.get("status","Em andamento"),
+                "uploads_json":  json.dumps(ciclo.get("uploads",[])),
+                "status":        ciclo.get("status","Em andamento"),
             })
+            conn.commit()
     except Exception as ex:
         logger.warning("db_salvar_ciclo_ativo: %s", ex)
 
+
 def db_acumular_upload(engine, empresa, filial, upload_info):
+    """Adiciona upload ao ciclo ativo via UPDATE direto no banco."""
+    if engine is None: return
     ciclo = db_obter_ciclo_ativo(engine, empresa, filial)
     if ciclo is None:
-        raise ValueError("Ciclo ativo não encontrado no banco para acumular upload")
+        raise ValueError("Ciclo ativo não encontrado no banco")
     uploads = ciclo.get("uploads", [])
     uploads.append(upload_info)
-    ciclo["uploads"] = uploads
-    # Grava diretamente o uploads_json sem passar pelo ciclo completo
-    if engine is None: return
     try:
-        from sqlalchemy import text
-        with engine.begin() as conn:
+        with engine.connect() as conn:
             conn.execute(text("""
                 UPDATE inventario_ciclo_ativo
                 SET uploads_json = :uploads_json, atualizado_em = NOW()
                 WHERE empresa = :e AND filial = :f
             """), {
-                "uploads_json": __import__('json').dumps(uploads),
+                "uploads_json": json.dumps(uploads),
                 "e": empresa,
                 "f": filial,
             })
+            conn.commit()
     except Exception as ex:
         raise RuntimeError(f"db_acumular_upload falhou: {ex}")
+
 
 def db_fechar_ciclo_ativo(engine, empresa, filial):
     if engine is None: return
     try:
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM inventario_ciclo_ativo WHERE empresa=:e AND filial=:f"),
-                         {"e":empresa,"f":filial})
+        with engine.connect() as conn:
+            conn.execute(text(
+                "DELETE FROM inventario_ciclo_ativo WHERE empresa=:e AND filial=:f"
+            ), {"e":empresa,"f":filial})
+            conn.commit()
     except Exception as ex:
         logger.warning("db_fechar_ciclo_ativo: %s", ex)
+
 
 def db_resetar_tudo(engine, empresa, filial):
     db_resetar_contados(engine, empresa, filial)
