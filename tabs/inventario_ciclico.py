@@ -1277,7 +1277,13 @@ def render(df_jlle, df_outras, formatar_br):
                               "acuracidade": _uploads[-1].get("acuracidade","—") if _uploads else "—",
                               "relatorio_json": rel_json,
                               "erp_json":       erp_json}
-                        db_gravar_ciclo(engine_db, empresa_sel, filial_sel, cf)
+                        try:
+                            db_gravar_ciclo(engine_db, empresa_sel, filial_sel, cf)
+                        except Exception as _err_grav:
+                            st.error(f"❌ Erro ao gravar ciclo no banco: {_err_grav}\n\n"
+                                     "Verifique se a coluna **erp_json** existe na tabela `inventario_ciclos`. "
+                                     "Se necessário, execute: `ALTER TABLE inventario_ciclos ADD COLUMN IF NOT EXISTS erp_json TEXT DEFAULT '[]';`")
+                            st.stop()
                         db_marcar_contados(engine_db, empresa_sel, filial_sel, list(todos),
                                            data=data_iso, num_ciclo=ciclo_ativo.get("num_ciclo",""))
                         db_fechar_ciclo_ativo(engine_db, empresa_sel, filial_sel)

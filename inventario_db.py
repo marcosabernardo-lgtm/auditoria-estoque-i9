@@ -66,18 +66,46 @@ def db_obter_ciclos(engine, empresa, filial):
                 SELECT num_ciclo, data_geracao, data_contagem, responsavel,
                        num_inv, acuracidade, qtd_lista, qtd_contados,
                        cobertura_pct, status, uploads,
-                       relatorio_json, produtos_contados
+                       relatorio_json, produtos_contados, erp_json
                 FROM inventario_ciclos
                 WHERE empresa=:e AND filial=:f
                 ORDER BY criado_em ASC
             """), {"e":empresa,"f":filial}).fetchall()
-        return [{"num_ciclo":r[0],"data_geracao":r[1],"data":r[2],"responsavel":r[3],
-                 "num_inv":r[4],"acuracidade":r[5],"qtd_lista":r[6],"qtd_contados":r[7],
-                 "cobertura_pct":float(r[8] or 0),"status":r[9],"uploads":r[10],
-                 "relatorio_json":r[11] or "[]","produtos_contados":json.loads(r[12] or "[]")}
-                for r in rows]
+
+        result = []
+        for r in rows:
+            # uploads pode estar gravado como JSON string (lista) ou int (legado)
+            uploads_raw = r[10]
+            if isinstance(uploads_raw, str):
+                try:
+                    uploads_val = json.loads(uploads_raw)
+                except Exception:
+                    uploads_val = []
+            elif isinstance(uploads_raw, list):
+                uploads_val = uploads_raw
+            else:
+                # int legado — não há como recuperar os dados dos uploads
+                uploads_val = []
+
+            result.append({
+                "num_ciclo":        r[0],
+                "data_geracao":     r[1],
+                "data":             r[2],
+                "responsavel":      r[3],
+                "num_inv":          r[4],
+                "acuracidade":      r[5],
+                "qtd_lista":        r[6],
+                "qtd_contados":     r[7],
+                "cobertura_pct":    float(r[8] or 0),
+                "status":           r[9],
+                "uploads":          uploads_val,
+                "relatorio_json":   r[11] or "[]",
+                "produtos_contados":json.loads(r[12] or "[]"),
+                "erp_json":         r[13] or "[]",
+            })
+        return result
     except Exception as ex:
-        logger.warning("db_obter_ciclos: %s", ex)
+        logger.error("db_obter_ciclos ERRO: %s", ex)
         return []
 
 
@@ -85,37 +113,66 @@ def db_gravar_ciclo(engine, empresa, filial, ciclo):
     if engine is None: return
     try:
         prods = ciclo.get("produtos_contados", [])
+
+        # uploads pode ser lista (nova versão) ou int (legado) — sempre serializa como JSON string
+        uploads_raw = ciclo.get("uploads", [])
+        if isinstance(uploads_raw, list):
+            uploads_json_str = json.dumps(uploads_raw, ensure_ascii=False)
+            qtd_uploads = len(uploads_raw)
+        else:
+            # valor legado era int; preserva contagem mas não os dados
+            uploads_json_str = "[]"
+            qtd_uploads = int(uploads_raw) if uploads_raw else 0
+
+        # qtd_uploads pode vir explicitamente do ciclo (campo separado)
+        qtd_uploads = ciclo.get("qtd_uploads", qtd_uploads)
+
         with engine.connect() as conn:
             conn.execute(text("""
                 INSERT INTO inventario_ciclos
-                    (empresa,filial,num_ciclo,data_geracao,data_contagem,responsavel,
-                     num_inv,acuracidade,qtd_lista,qtd_contados,cobertura_pct,status,uploads,
-                     relatorio_json,produtos_contados)
+                    (empresa, filial, num_ciclo, data_geracao, data_contagem, responsavel,
+                     num_inv, acuracidade, qtd_lista, qtd_contados, cobertura_pct, status,
+                     uploads, relatorio_json, produtos_contados, erp_json)
                 VALUES
-                    (:empresa,:filial,:num_ciclo,:data_geracao,:data,:responsavel,
-                     :num_inv,:acuracidade,:qtd_lista,:qtd_contados,:cobertura_pct,:status,:uploads,
-                     :relatorio_json,:produtos_contados)
+                    (:empresa, :filial, :num_ciclo, :data_geracao, :data, :responsavel,
+                     :num_inv, :acuracidade, :qtd_lista, :qtd_contados, :cobertura_pct, :status,
+                     :uploads, :relatorio_json, :produtos_contados, :erp_json)
+                ON CONFLICT (empresa, filial, num_ciclo) DO UPDATE SET
+                    data_geracao      = EXCLUDED.data_geracao,
+                    data_contagem     = EXCLUDED.data_contagem,
+                    responsavel       = EXCLUDED.responsavel,
+                    num_inv           = EXCLUDED.num_inv,
+                    acuracidade       = EXCLUDED.acuracidade,
+                    qtd_lista         = EXCLUDED.qtd_lista,
+                    qtd_contados      = EXCLUDED.qtd_contados,
+                    cobertura_pct     = EXCLUDED.cobertura_pct,
+                    status            = EXCLUDED.status,
+                    uploads           = EXCLUDED.uploads,
+                    relatorio_json    = EXCLUDED.relatorio_json,
+                    produtos_contados = EXCLUDED.produtos_contados,
+                    erp_json          = EXCLUDED.erp_json
             """), {
-                "empresa":          empresa,
-                "filial":           filial,
-                "num_ciclo":        ciclo.get("num_ciclo",""),
-                "data_geracao":     ciclo.get("data_geracao",""),
-                "data":             ciclo.get("data",""),
-                "responsavel":      ciclo.get("responsavel",""),
-                "num_inv":          ciclo.get("num_inv",""),
-                "acuracidade":      ciclo.get("acuracidade",""),
-                "qtd_lista":        ciclo.get("qtd_lista",0),
-                "qtd_contados":     len(prods),
-                "cobertura_pct":    ciclo.get("cobertura_pct",0),
-                "status":           ciclo.get("status","Concluído"),
-                "uploads":          ciclo.get("uploads",1),
-                "relatorio_json":   ciclo.get("relatorio_json","[]"),
-                "produtos_contados":json.dumps(prods),
-                "erp_json":         ciclo.get("erp_json","[]"),
+                "empresa":           empresa,
+                "filial":            filial,
+                "num_ciclo":         ciclo.get("num_ciclo", ""),
+                "data_geracao":      ciclo.get("data_geracao", ""),
+                "data":              ciclo.get("data", ""),
+                "responsavel":       ciclo.get("responsavel", ""),
+                "num_inv":           ciclo.get("num_inv", ""),
+                "acuracidade":       ciclo.get("acuracidade", ""),
+                "qtd_lista":         ciclo.get("qtd_lista", 0),
+                "qtd_contados":      len(prods),
+                "cobertura_pct":     ciclo.get("cobertura_pct", 0),
+                "status":            ciclo.get("status", "Concluído"),
+                "uploads":           uploads_json_str,
+                "relatorio_json":    ciclo.get("relatorio_json", "[]"),
+                "produtos_contados": json.dumps(prods, ensure_ascii=False),
+                "erp_json":          ciclo.get("erp_json", "[]"),
             })
             conn.commit()
     except Exception as ex:
-        logger.warning("db_gravar_ciclo: %s", ex)
+        logger.error("db_gravar_ciclo ERRO: %s", ex)
+        raise  # re-lança para que o chamador exiba o erro na UI
 
 
 def db_resetar_ciclos(engine, empresa, filial):
