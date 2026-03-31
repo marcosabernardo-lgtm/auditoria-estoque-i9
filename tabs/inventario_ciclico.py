@@ -1021,18 +1021,42 @@ def render(df_jlle, df_outras, formatar_br):
             # Limpa cache se o valor era None (dados não estavam prontos antes)
             if st.session_state.get(f"_pdf5_bytes_{num_c}") is None:
                 st.session_state.pop(f"_pdf5_bytes_{num_c}", None)
+
         for c in ciclos:
             num_c    = c.get("num_ciclo","")
             rel_json = c.get("relatorio_json","[]")
+
+            # Tenta 1: relatorio_json salvo no banco
+            df_c = pd.DataFrame()
             try:
-                df_c = pd.read_json(io.StringIO(rel_json), orient="records") \
-                       if rel_json and rel_json != "[]" else pd.DataFrame()
+                if rel_json and rel_json not in ("[]", "", None):
+                    df_c = pd.read_json(io.StringIO(rel_json), orient="records")
             except Exception:
                 df_c = pd.DataFrame()
-            if df_c.empty and not df_filial.empty:
-                ups_c = c.get("uploads_raw",[])
-                if ups_c:
+
+            # Tenta 2: monta a partir dos uploads salvos no ciclo
+            if df_c.empty:
+                ups_c = c.get("uploads", []) if isinstance(c.get("uploads"), list) else []
+                if ups_c and not df_filial.empty:
                     df_c = montar_df_relatorio(ups_c, df_filial)
+
+            # Tenta 3: monta a partir de produtos_contados + df_filial (fallback final)
+            if df_c.empty and not df_filial.empty:
+                prods = [str(p).zfill(6) for p in c.get("produtos_contados", [])]
+                if prods and "Produto" in df_filial.columns:
+                    df_c = df_filial[df_filial["Produto"].astype(str).str.zfill(6).isin(prods)].copy()
+                    if not df_c.empty:
+                        # Renomeia para formato padrão do relatório
+                        df_c = df_c.rename(columns={"Saldo ERP (Total)": "Saldo ERP (Total)"})
+                        for col in ["Saldo WMS","Invent WMS","Diferença Invent","Vl Total Diferença"]:
+                            if col not in df_c.columns:
+                                df_c[col] = 0
+                        if "Acuracidade" not in df_c.columns:
+                            df_c["Acuracidade"] = c.get("acuracidade","—")
+                        if "Vl Total ERP" not in df_c.columns and "Vl Unit" in df_c.columns:
+                            df_c["Vl Total ERP"] = pd.to_numeric(df_c.get("Saldo ERP (Total)",0), errors="coerce").fillna(0) * \
+                                                   pd.to_numeric(df_c["Vl Unit"], errors="coerce").fillna(0)
+
             dfs_rel_todos[num_c] = df_c
 
         # Tabela com checkboxes inline
