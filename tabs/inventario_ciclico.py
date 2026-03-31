@@ -1438,9 +1438,9 @@ def render(df_jlle, df_outras, formatar_br):
                             key=f"dl5_{num_c}",
                             help=f"Baixar PDF — {num_c}")
                     else:
-                        cpdf.caption("⚠️ erro PDF")
+                        cpdf.caption("⚠️ retornou None")
                 except Exception as _epdf:
-                    cpdf.caption(f"⚠️ {str(_epdf)[:20]}")
+                    cpdf.caption(f"⚠️ {str(_epdf)[:50]}")
             else:
                 cpdf.caption("sem dados")
 
