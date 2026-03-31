@@ -295,8 +295,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     elems.append(Spacer(1, 1*cm))
     elems.append(Paragraph("Gestão Integrada I9", sty("gi", fontSize=11, textColor=C_ORANGE, fontName="Helvetica-Bold")))
     elems.append(Spacer(1, 0.3*cm))
-    elems.append(Paragraph("Relatório de", sty("r1", fontSize=18, textColor=C_TEAL)))
-    elems.append(Paragraph("Inventário Cíclico", s_capa_title))
+    elems.append(Paragraph("Relatório de Inventário Cíclico", s_capa_title))
     elems.append(HRFlowable(width="100%", thickness=2, color=C_ORANGE))
     elems.append(Spacer(1, 0.5*cm))
     elems.append(Paragraph(f"Unidade: {label_unidade}", s_capa_sub))
@@ -379,7 +378,16 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         df_rel = dfs_rel.get(num_c, pd.DataFrame())
         n_sku  = len(df_rel) if not df_rel.empty else c.get("qtd_contados", len(c.get("produtos_contados",[])))
 
-        elems.append(Paragraph(f"Ciclo {idx} — {num_c}", s_sec))
+        # Remove duplicação no num_ciclo ex: "20260331-Service-Service-Matriz" → "20260331-Service-Matriz"
+        _num_c_display = num_c
+        parts = num_c.split("-")
+        if len(parts) > 2:
+            seen = []
+            for p in parts:
+                if p not in seen:
+                    seen.append(p)
+            _num_c_display = "-".join(seen)
+        elems.append(Paragraph(f"Ciclo {idx} — {_num_c_display}", s_sec))
         elems.append(HRFlowable(width="100%", thickness=1, color=C_ORANGE))
         elems.append(Spacer(1, 0.3*cm))
 
@@ -440,7 +448,11 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
                         except:
                             r.append(Paragraph("—", s_num))
                     else:
-                        r.append(Paragraph(str(v)[:55], s_cell))
+                        # Garante zeros à esquerda para código do produto
+                        if k == "Produto":
+                            r.append(Paragraph(str(v).zfill(6), s_cell))
+                        else:
+                            r.append(Paragraph(str(v)[:55], s_cell))
                 tbl_data.append(r)
 
             tbl_prod = Table(tbl_data, colWidths=col_w, repeatRows=1)
