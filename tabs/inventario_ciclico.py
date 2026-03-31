@@ -790,16 +790,37 @@ def render(df_jlle, df_outras, formatar_br):
                 use_container_width=True, hide_index=True)
 
             if st.button("📥 Adicionar esta etapa ao ciclo", key="ic_add_etapa", type="primary"):
-                db_acumular_upload(engine_db, empresa_sel, filial_sel, {
-                    "num_inv":     res.get("num_inv","—"),
-                    "data":        res.get("data","—"),
-                    "data_iso":    res.get("data_iso", date.today().isoformat()),
-                    "responsavel": res.get("responsavel","—"),
-                    "acuracidade": res.get("acuracidade","—"),
-                    "produtos":    list(produtos_lista & produtos_wms),
-                })
-                st.success(f"Etapa adicionada! {len(novos_desta_etapa)} novos produtos contados.")
-                st.rerun()
+                try:
+                    upload_data = {
+                        "num_inv":     res.get("num_inv","—"),
+                        "data":        res.get("data","—"),
+                        "data_iso":    res.get("data_iso", date.today().isoformat()),
+                        "responsavel": res.get("responsavel","—"),
+                        "acuracidade": res.get("acuracidade","—"),
+                        "produtos":    list(produtos_lista & produtos_wms),
+                    }
+                    st.write("DEBUG — produtos a gravar:", upload_data["produtos"])
+                    # Testa UPDATE direto
+                    import json as _json
+                    from sqlalchemy import text as _text
+                    try:
+                        with engine_db.connect() as _conn:
+                            _result = _conn.execute(_text("""
+                                UPDATE inventario_ciclo_ativo
+                                SET uploads_json = :v
+                                WHERE empresa = :e AND filial = :f
+                            """), {"v": _json.dumps([upload_data]), "e": empresa_sel, "f": filial_sel})
+                            _conn.commit()
+                            st.write(f"DEBUG — rows afetadas: {_result.rowcount}")
+                    except Exception as _ue:
+                        st.error(f"DEBUG — UPDATE direto falhou: {_ue}")
+                    # Verifica se gravou
+                    ciclo_check = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+                    st.write("DEBUG — uploads após UPDATE:", ciclo_check.get("uploads") if ciclo_check else "None")
+                    st.success(f"Etapa adicionada! {len(novos_desta_etapa)} novos produtos contados.")
+                    st.rerun()
+                except Exception as _err:
+                    st.error(f"ERRO ao adicionar etapa: {_err}")
 
         except Exception as e:
             st.error(f"Erro ao processar arquivo: {e}")
