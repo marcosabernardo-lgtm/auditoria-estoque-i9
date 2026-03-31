@@ -68,26 +68,32 @@ def _limpar_cod(serie, digitos=2):
     )
 
 
-def _extrair_armazem(serie, empresa=None):
+def _extrair_armazem(serie, empresa_serie=None):
     """
     Extrai armazém da Localização WMS.
     Padrão geral: 'A01.xxx' → '01', 'A02.xxx' → '02'
-    Exceção Tools: 'A02.xxx' → '20'
+    Exceção Tools (linha a linha): 'A02.xxx' → '20'
+    empresa_serie: pd.Series com o nome da empresa por linha
     """
+    import unicodedata as _ud
+    def _norm(s): return "".join(c for c in _ud.normalize("NFD", str(s)) if _ud.category(c) != "Mn")
+
     codigos = (
         serie.astype(str)
         .str.extract(r"^A(\d+)", expand=False)
         .str.zfill(2)
         .fillna("01")
     )
-    if empresa is not None:
-        # Normaliza para comparação sem acento
-        import unicodedata as _ud
-        def _norm(s): return "".join(c for c in _ud.normalize("NFD",str(s)) if _ud.category(c)!="Mn")
-        emp_norm = _norm(empresa).lower()
-        if "tools" in emp_norm:
-            prefix = serie.astype(str).str.extract(r"^A(\d+)", expand=False).str.zfill(2).fillna("01")
-            codigos = prefix.apply(lambda x: "20" if x == "02" else x)
+
+    if empresa_serie is not None:
+        # Aplica regra Tools linha a linha
+        import pandas as _pd
+        emp_norm = empresa_serie.astype(str).apply(_norm).str.lower()
+        is_tools = emp_norm.str.contains("tools")
+        is_a02   = codigos == "02"
+        codigos  = codigos.copy()
+        codigos[is_tools & is_a02] = "20"
+
     return codigos
 
 
@@ -134,11 +140,12 @@ def _ler_wms(arquivo):
         if nome in df.columns:
             if nome != "Localização":
                 df = df.rename(columns={nome: "Localização"})
-            # Extrai empresa do Filial_Raw para aplicar regra de armazém correta
-            empresa_wms = ""
+            # Extrai empresa por linha para aplicar regra de armazém corretamente
             if "Filial_Raw" in df.columns:
-                empresa_wms = df["Filial_Raw"].astype(str).str.split("-", n=1).str[1].str.strip().str.split(" - ").str[0].str.strip().iloc[0] if len(df) > 0 else ""
-            df["Armazem"] = _extrair_armazem(df["Localização"], empresa=empresa_wms)
+                empresa_serie = df["Filial_Raw"].astype(str).str.split("-", n=1).str[1].str.strip().str.split(" - ").str[0].str.strip()
+            else:
+                empresa_serie = None
+            df["Armazem"] = _extrair_armazem(df["Localização"], empresa_serie=empresa_serie)
             break
 
     if "Filial_Raw" in df.columns:
