@@ -531,59 +531,87 @@ def gerar_relatorio_kpmg_pdf(ciclos: list, label_unidade: str,
 # ── Stepper ───────────────────────────────────────────────────────────────────
 
 def _render_stepper(etapa_ativa: int):
-    """Renderiza o stepper horizontal de 4 etapas."""
-    etapas = [
-        (1, "Gerar lista"),
-        (2, "Fazer inventário"),
-        (3, "Importar resultado"),
-        (4, "Fechar inventário"),
-    ]
+    COR_DONE    = "#27AE60"
+    COR_ACTIVE  = "#005562"
+    COR_PENDING = "#cccccc"
 
-    def status(n):
-        if n < etapa_ativa:  return "done"
-        if n == etapa_ativa: return "active"
-        return "pending"
+    etapas = ["Gerar lista", "Fazer inventário", "Importar resultado", "Fechar inventário"]
+    html_steps = []
 
-    cor_done    = "#27AE60"
-    cor_active  = "#005562"
-    cor_pending = "var(--color-border-tertiary)"
+    for i, label in enumerate(etapas):
+        n  = i + 1
+        if n < etapa_ativa:
+            st_class = "done"
+            icon     = "✓"
+            cbg      = COR_DONE
+            ccol     = "#fff"
+            cbord    = COR_DONE
+            lcol     = COR_DONE
+            bbg      = "#E8F5E9"
+            bcol     = "#27500A"
+            btxt     = "Concluído"
+            line_col = COR_DONE
+        elif n == etapa_ativa:
+            st_class = "active"
+            icon     = str(n)
+            cbg      = COR_ACTIVE
+            ccol     = "#fff"
+            cbord    = COR_ACTIVE
+            lcol     = COR_ACTIVE
+            bbg      = "#E1F5EE"
+            bcol     = "#085041"
+            btxt     = "Em andamento"
+            line_col = COR_PENDING
+        else:
+            st_class = "pending"
+            icon     = str(n)
+            cbg      = "#fff"
+            ccol     = "#888"
+            cbord    = COR_PENDING
+            lcol     = "#888"
+            bbg      = "#f5f5f5"
+            bcol     = "#888"
+            btxt     = "Pendente"
+            line_col = COR_PENDING
 
-    # Monta HTML do stepper
-    items = []
-    for i, (n, label) in enumerate(etapas):
-        st = status(n)
-        icon  = "✓" if st == "done" else str(n)
-        after_color = cor_done if st == "done" else cor_active if st == "active" else "var(--color-border-tertiary)"
-        circle_bg   = cor_done if st == "done" else cor_active if st == "active" else "var(--color-background-primary, #fff)"
-        circle_col  = "#fff" if st in ("done","active") else "var(--color-text-secondary)"
-        circle_bord = cor_done if st == "done" else cor_active if st == "active" else "var(--color-border-tertiary)"
-        label_col   = cor_done if st == "done" else cor_active if st == "active" else "var(--color-text-secondary)"
-        badge_bg    = "#E8F5E9" if st == "done" else "#E1F5EE" if st == "active" else "var(--color-background-secondary)"
-        badge_col   = "#27500A" if st == "done" else "#085041" if st == "active" else "var(--color-text-tertiary)"
-        badge_txt   = "✓ Concluído" if st == "done" else "Em andamento" if st == "active" else "Pendente"
-        connector   = f'<div style="flex:1;height:2px;background:{cor_done if st=="done" else "var(--color-border-tertiary)"};margin-top:18px;"></div>' if i < len(etapas)-1 else ""
+        circle = (
+            '<div style="width:36px;height:36px;border-radius:50%;'
+            f'background:{cbg};border:2px solid {cbord};'
+            'display:flex;align-items:center;justify-content:center;'
+            f'font-weight:500;font-size:14px;color:{ccol};z-index:1;">'
+            f'{icon}</div>'
+        )
+        lbl = (
+            f'<div style="margin-top:6px;font-size:12px;font-weight:500;'
+            f'color:{lcol};text-align:center;max-width:90px;line-height:1.3;">'
+            f'{label}</div>'
+        )
+        badge = (
+            f'<div style="margin-top:4px;font-size:11px;padding:2px 8px;'
+            f'border-radius:20px;background:{bbg};color:{bcol};">{btxt}</div>'
+        )
+        step_html = (
+            '<div style="display:flex;flex-direction:column;align-items:center;flex:1;">'
+            + circle + lbl + badge
+            + '</div>'
+        )
+        html_steps.append(step_html)
 
-        items.append(f"""
-        <div style="display:flex;flex-direction:column;align-items:center;flex:1;">
-          <div style="width:36px;height:36px;border-radius:50%;background:{circle_bg};
-                      border:2px solid {circle_bord};display:flex;align-items:center;
-                      justify-content:center;font-weight:500;font-size:14px;
-                      color:{circle_col};z-index:1;">{icon}</div>
-          <div style="margin-top:6px;font-size:12px;font-weight:500;color:{label_col};
-                      text-align:center;max-width:90px;line-height:1.3;">{label}</div>
-          <div style="margin-top:4px;font-size:11px;padding:2px 8px;border-radius:20px;
-                      background:{badge_bg};color:{badge_col};">{badge_txt}</div>
-        </div>
-        {connector}
-        """)
+        if i < len(etapas) - 1:
+            connector = (
+                f'<div style="flex:1;height:2px;background:{line_col};'
+                'margin-top:18px;min-width:20px;"></div>'
+            )
+            html_steps.append(connector)
 
+    inner = "".join(html_steps)
     st.markdown(
-        f"""<div style="display:flex;align-items:flex-start;gap:0;padding:1rem 0 0.5rem;">
-            {"".join(items)}
-        </div>""",
+        '<div style="display:flex;align-items:flex-start;padding:1rem 0 0.5rem;">'
+        + inner
+        + '</div>'
+        + '<hr style="margin:0.5rem 0 1.5rem;opacity:0.15;">',
         unsafe_allow_html=True
     )
-    st.markdown("<hr style='margin:0.5rem 0 1.5rem;opacity:0.2;'>", unsafe_allow_html=True)
 
 
 # ── Render ────────────────────────────────────────────────────────────────────
