@@ -955,12 +955,21 @@ def render(df_jlle, df_outras, formatar_br):
 
         num_ciclo_conf = ciclo_ativo.get("num_ciclo","")
 
-        # Monta df de divergências a partir dos uploads do ciclo ativo
+        # Produtos efetivamente inventariados neste ciclo (vindos dos uploads)
+        prods_inventariados = set()
+        for u in _uploads:
+            prods_inventariados.update(str(p).strip().zfill(6) for p in u.get("produtos",[]))
+
+        # Monta df apenas com os produtos inventariados e filtra divergências
         df_div = pd.DataFrame()
         if _uploads and not df_filial.empty:
             df_div = montar_df_relatorio(_uploads, df_filial)
-            if not df_div.empty and "Diferença Invent" in df_div.columns:
-                df_div = df_div[df_div["Diferença Invent"] != 0].copy()
+            if not df_div.empty:
+                # Garante que só aparecem produtos que foram inventariados no ciclo
+                if "Produto" in df_div.columns:
+                    df_div = df_div[df_div["Produto"].astype(str).str.zfill(6).isin(prods_inventariados)].copy()
+                if "Diferença Invent" in df_div.columns:
+                    df_div = df_div[df_div["Diferença Invent"] != 0].copy()
 
         if df_div.empty:
             st.success("✅ Nenhuma divergência encontrada nos uploads realizados.")
