@@ -631,6 +631,17 @@ def render(df_jlle, df_outras, formatar_br):
     pct_cob    = (total_cont/total_skus*100) if total_skus>0 else 0
     cor_barra  = "#27AE60" if pct_cob>=100 else "#EC6E21"
 
+    # Stepper de etapas
+    if not ciclo_ativo:
+        _etapa = 1
+    elif not _uploads_ciclo:
+        _etapa = 2
+    elif pct_cob < 100:
+        _etapa = 3
+    else:
+        _etapa = 4
+    _render_stepper(_etapa)
+
     # ── Métricas ──────────────────────────────────────────────────────────
     st.markdown("---")
     c1,c2,c3,c4 = st.columns(4)
