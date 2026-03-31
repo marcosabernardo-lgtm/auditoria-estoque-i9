@@ -65,14 +65,16 @@ def db_obter_ciclos(engine, empresa, filial):
             rows = conn.execute(text("""
                 SELECT num_ciclo, data_geracao, data_contagem, responsavel,
                        num_inv, acuracidade, qtd_lista, qtd_contados,
-                       cobertura_pct, status, uploads
+                       cobertura_pct, status, uploads,
+                       relatorio_json, produtos_contados
                 FROM inventario_ciclos
                 WHERE empresa=:e AND filial=:f
                 ORDER BY criado_em ASC
             """), {"e":empresa,"f":filial}).fetchall()
         return [{"num_ciclo":r[0],"data_geracao":r[1],"data":r[2],"responsavel":r[3],
                  "num_inv":r[4],"acuracidade":r[5],"qtd_lista":r[6],"qtd_contados":r[7],
-                 "cobertura_pct":float(r[8] or 0),"status":r[9],"uploads":r[10]}
+                 "cobertura_pct":float(r[8] or 0),"status":r[9],"uploads":r[10],
+                 "relatorio_json":r[11] or "[]","produtos_contados":json.loads(r[12] or "[]")}
                 for r in rows]
     except Exception as ex:
         logger.warning("db_obter_ciclos: %s", ex)
@@ -82,27 +84,33 @@ def db_obter_ciclos(engine, empresa, filial):
 def db_gravar_ciclo(engine, empresa, filial, ciclo):
     if engine is None: return
     try:
+        prods = ciclo.get("produtos_contados", [])
         with engine.connect() as conn:
             conn.execute(text("""
                 INSERT INTO inventario_ciclos
                     (empresa,filial,num_ciclo,data_geracao,data_contagem,responsavel,
-                     num_inv,acuracidade,qtd_lista,qtd_contados,cobertura_pct,status,uploads)
+                     num_inv,acuracidade,qtd_lista,qtd_contados,cobertura_pct,status,uploads,
+                     relatorio_json,produtos_contados)
                 VALUES
                     (:empresa,:filial,:num_ciclo,:data_geracao,:data,:responsavel,
-                     :num_inv,:acuracidade,:qtd_lista,:qtd_contados,:cobertura_pct,:status,:uploads)
+                     :num_inv,:acuracidade,:qtd_lista,:qtd_contados,:cobertura_pct,:status,:uploads,
+                     :relatorio_json,:produtos_contados)
             """), {
-                "empresa":empresa,"filial":filial,
-                "num_ciclo":ciclo.get("num_ciclo",""),
-                "data_geracao":ciclo.get("data_geracao",""),
-                "data":ciclo.get("data",""),
-                "responsavel":ciclo.get("responsavel",""),
-                "num_inv":ciclo.get("num_inv",""),
-                "acuracidade":ciclo.get("acuracidade",""),
-                "qtd_lista":ciclo.get("qtd_lista",0),
-                "qtd_contados":len(ciclo.get("produtos_contados",[])),
-                "cobertura_pct":ciclo.get("cobertura_pct",0),
-                "status":ciclo.get("status","Concluído"),
-                "uploads":ciclo.get("uploads",1),
+                "empresa":          empresa,
+                "filial":           filial,
+                "num_ciclo":        ciclo.get("num_ciclo",""),
+                "data_geracao":     ciclo.get("data_geracao",""),
+                "data":             ciclo.get("data",""),
+                "responsavel":      ciclo.get("responsavel",""),
+                "num_inv":          ciclo.get("num_inv",""),
+                "acuracidade":      ciclo.get("acuracidade",""),
+                "qtd_lista":        ciclo.get("qtd_lista",0),
+                "qtd_contados":     len(prods),
+                "cobertura_pct":    ciclo.get("cobertura_pct",0),
+                "status":           ciclo.get("status","Concluído"),
+                "uploads":          ciclo.get("uploads",1),
+                "relatorio_json":   ciclo.get("relatorio_json","[]"),
+                "produtos_contados":json.dumps(prods),
             })
             conn.commit()
     except Exception as ex:
