@@ -581,6 +581,8 @@ def render(df_jlle, df_outras, formatar_br):
         df_score = pd.DataFrame(); total_skus = 0; total_cont = 0; pct_cob = 0.0
 
     _uploads = ciclo_ativo.get("uploads", []) if ciclo_ativo else []
+    if not isinstance(_uploads, list):
+        _uploads = []  # ciclos antigos gravaram uploads como int — normaliza para lista vazia
     ja_cont_ciclo = set()
     for u in _uploads:
         ja_cont_ciclo.update(str(p).strip().zfill(6) for p in u.get("produtos", []))
@@ -1117,7 +1119,7 @@ def render(df_jlle, df_outras, formatar_br):
                 f"""<div style="background:#004550;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
                   <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div><span style="color:#EC6E21;font-weight:bold;">📋 {num_ciclo_fech}</span><br>
-                    <span style="color:#fff;font-size:0.85rem;">Gerado em {ciclo_ativo["data_geracao"]} · {ciclo_ativo["qtd_lista"]} produtos · {len(_uploads)} upload(s)</span></div>
+                    <span style="color:#fff;font-size:0.85rem;">Gerado em {ciclo_ativo["data_geracao"]} · {ciclo_ativo["qtd_lista"]} produtos · {ciclo_ativo.get("qtd_uploads", len(_uploads))} upload(s)</span></div>
                     <span style="color:#EC6E21;font-weight:bold;font-size:1.2rem;">{pct_ciclo:.1f}%</span>
                   </div></div>""", unsafe_allow_html=True)
 
@@ -1229,15 +1231,50 @@ def render(df_jlle, df_outras, formatar_br):
                         data_iso = _uploads[-1].get("data_iso",date.today().isoformat()) if _uploads else date.today().isoformat()
                         pct_f    = len(todos & pl_ciclo)/len(pl_ciclo)*100 if pl_ciclo else 0
                         df_rel   = montar_df_relatorio(_uploads, df_filial)
-                        # Inclui dados do ERP no relatorio_json
-                        rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
+                        # Prioriza dados do ERP Protheus como fonte da verdade para o relatorio_json
+                        # Normaliza colunas do ERP para o formato esperado pelo PDF
+                        if not df_erp_fech.empty:
+                            _df_erp_norm = df_erp_fech.copy()
+                            _col_rename_erp = {
+                                "Codigo":        "Produto",
+                                "Descricao":     "Descrição",
+                                "Qtd WMS":       "Invent WMS",
+                                "Qtd ERP":       "Saldo ERP (Total)",
+                                "Divergencia Qtd":"Diferença Invent",
+                                "Divergencia Vl": "Vl Total Diferença",
+                            }
+                            _df_erp_norm = _df_erp_norm.rename(columns={k:v for k,v in _col_rename_erp.items() if k in _df_erp_norm.columns})
+                            if "Produto" in _df_erp_norm.columns:
+                                _df_erp_norm["Produto"] = _df_erp_norm["Produto"].astype(str).str.zfill(6)
+                            # Enriquece com Vl Unit/Vl Total ERP do df_filial quando disponível
+                            if not df_filial.empty and "Produto" in df_filial.columns and "Vl Unit" in df_filial.columns:
+                                _vl = df_filial[["Produto","Vl Unit"]].copy()
+                                _vl["Produto"] = _vl["Produto"].astype(str).str.zfill(6)
+                                _vl = _vl.drop_duplicates("Produto")
+                                _df_erp_norm = _df_erp_norm.merge(_vl, on="Produto", how="left")
+                                _df_erp_norm["Vl Unit"] = pd.to_numeric(_df_erp_norm["Vl Unit"], errors="coerce").fillna(0)
+                                saldo = pd.to_numeric(_df_erp_norm.get("Saldo ERP (Total)", 0), errors="coerce").fillna(0)
+                                _df_erp_norm["Vl Total ERP"] = saldo * _df_erp_norm["Vl Unit"]
+                            # Adiciona Acuracidade do último upload
+                            if "Acuracidade" not in _df_erp_norm.columns:
+                                _df_erp_norm["Acuracidade"] = _uploads[-1].get("acuracidade","—") if _uploads else "—"
+                            # Adiciona Saldo WMS se não existir
+                            if "Saldo WMS" not in _df_erp_norm.columns and "Invent WMS" in _df_erp_norm.columns:
+                                _df_erp_norm["Saldo WMS"] = _df_erp_norm["Invent WMS"]
+                            rel_json = _df_erp_norm.to_json(orient="records", force_ascii=False)
+                        else:
+                            rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
                         erp_json = df_erp_fech.to_json(orient="records", force_ascii=False) if not df_erp_fech.empty else "[]"
-                        cf = {**ciclo_ativo, "uploads":len(_uploads), "produtos_contados":list(todos),
-                              "cobertura_pct":pct_f, "status":"Concluído",
-                              "num_inv":    _uploads[-1].get("num_inv","—") if _uploads else "—",
-                              "data":       _uploads[-1].get("data","—") if _uploads else "—",
-                              "responsavel":_uploads[-1].get("responsavel","—") if _uploads else "—",
-                              "acuracidade":_uploads[-1].get("acuracidade","—") if _uploads else "—",
+                        cf = {**ciclo_ativo,
+                              "uploads":         _uploads,        # preserva lista completa para o PDF no histórico
+                              "qtd_uploads":     len(_uploads),   # contador separado para exibição
+                              "produtos_contados":list(todos),
+                              "cobertura_pct":   pct_f,
+                              "status":          "Concluído",
+                              "num_inv":     _uploads[-1].get("num_inv","—") if _uploads else "—",
+                              "data":        _uploads[-1].get("data","—") if _uploads else "—",
+                              "responsavel": _uploads[-1].get("responsavel","—") if _uploads else "—",
+                              "acuracidade": _uploads[-1].get("acuracidade","—") if _uploads else "—",
                               "relatorio_json": rel_json,
                               "erp_json":       erp_json}
                         db_gravar_ciclo(engine_db, empresa_sel, filial_sel, cf)
@@ -1274,12 +1311,14 @@ def render(df_jlle, df_outras, formatar_br):
 
         # Monta dfs_rel para cada ciclo (necessário para o PDF)
         # Limpa caches de PDF antigos que possam ter ficado como None
+        # Limpa caches de PDF antigos que possam ter ficado como None
+        # (podem ter sido gerados antes dos dados estarem prontos)
         dfs_rel_todos = {}
         for c in ciclos:
-            num_c    = c.get("num_ciclo","")
-            # Limpa cache se o valor era None (dados não estavam prontos antes)
-            if st.session_state.get(f"_pdf5_bytes_{num_c}") is None:
-                st.session_state.pop(f"_pdf5_bytes_{num_c}", None)
+            num_c = c.get("num_ciclo","")
+            _pdf_key = f"_pdf5_bytes_{num_c}"
+            if st.session_state.get(_pdf_key) is None:
+                st.session_state.pop(_pdf_key, None)
 
         for c in ciclos:
             num_c    = c.get("num_ciclo","")
@@ -1299,11 +1338,47 @@ def render(df_jlle, df_outras, formatar_br):
 
             # Tenta 2: monta a partir dos uploads salvos no ciclo
             if df_c.empty:
-                ups_c = c.get("uploads", []) if isinstance(c.get("uploads"), list) else []
+                ups_c = c.get("uploads", [])
+                if not isinstance(ups_c, list):
+                    ups_c = []  # ciclos legados gravaram uploads como int — normaliza
                 if ups_c and not df_filial.empty:
                     df_c = montar_df_relatorio(ups_c, df_filial)
 
-            # Tenta 3: monta a partir de produtos_contados + df_filial (fallback final)
+            # Tenta 3: reconstrói a partir do erp_json salvo no ciclo
+            if df_c.empty:
+                erp_json_c = c.get("erp_json", "[]")
+                try:
+                    if erp_json_c and erp_json_c not in ("[]", "", None):
+                        _df_erp_c = pd.read_json(io.StringIO(erp_json_c), orient="records")
+                        if not _df_erp_c.empty:
+                            _col_map = {
+                                "Codigo":         "Produto",
+                                "Descricao":      "Descrição",
+                                "Qtd WMS":        "Invent WMS",
+                                "Qtd ERP":        "Saldo ERP (Total)",
+                                "Divergencia Qtd":"Diferença Invent",
+                                "Divergencia Vl": "Vl Total Diferença",
+                            }
+                            _df_erp_c = _df_erp_c.rename(columns={k:v for k,v in _col_map.items() if k in _df_erp_c.columns})
+                            if "Produto" in _df_erp_c.columns:
+                                _df_erp_c["Produto"] = _df_erp_c["Produto"].astype(str).str.zfill(6)
+                            if not df_filial.empty and "Produto" in df_filial.columns and "Vl Unit" in df_filial.columns:
+                                _vl = df_filial[["Produto","Vl Unit"]].copy()
+                                _vl["Produto"] = _vl["Produto"].astype(str).str.zfill(6)
+                                _vl = _vl.drop_duplicates("Produto")
+                                _df_erp_c = _df_erp_c.merge(_vl, on="Produto", how="left")
+                                _df_erp_c["Vl Unit"] = pd.to_numeric(_df_erp_c.get("Vl Unit", 0), errors="coerce").fillna(0)
+                                saldo_c = pd.to_numeric(_df_erp_c.get("Saldo ERP (Total)", 0), errors="coerce").fillna(0)
+                                _df_erp_c["Vl Total ERP"] = saldo_c * _df_erp_c["Vl Unit"]
+                            if "Saldo WMS" not in _df_erp_c.columns and "Invent WMS" in _df_erp_c.columns:
+                                _df_erp_c["Saldo WMS"] = _df_erp_c["Invent WMS"]
+                            if "Acuracidade" not in _df_erp_c.columns:
+                                _df_erp_c["Acuracidade"] = c.get("acuracidade","—")
+                            df_c = _df_erp_c
+                except Exception:
+                    df_c = pd.DataFrame()
+
+            # Tenta 4: monta a partir de produtos_contados + df_filial (fallback final)
             if df_c.empty and not df_filial.empty:
                 prods = [str(p).zfill(6) for p in c.get("produtos_contados", [])]
                 if prods and "Produto" in df_filial.columns:
@@ -1320,22 +1395,6 @@ def render(df_jlle, df_outras, formatar_br):
                                 pd.to_numeric(df_c["Vl Unit"], errors="coerce").fillna(0))
 
             dfs_rel_todos[num_c] = df_c
-
-        # DEBUG temporário — remover após resolver
-        with st.expander("🔍 Debug (remover após resolver)"):
-            for c in ciclos:
-                num_c = c.get("num_ciclo","")
-                df_c  = dfs_rel_todos.get(num_c, pd.DataFrame())
-                st.write(f"**{num_c}**")
-                st.write(f"- rel_json len: {len(c.get('relatorio_json','[]'))}")
-                st.write(f"- produtos_contados: {c.get('produtos_contados',[])}")
-                st.write(f"- df_c shape: {df_c.shape}")
-                st.write(f"- df_c colunas: {list(df_c.columns) if not df_c.empty else 'VAZIO'}")
-                if not df_c.empty:
-                    st.dataframe(df_c.head(3))
-                _pdf_key = f"_pdf5_bytes_{num_c}"
-                st.write(f"- pdf cache: {type(st.session_state.get(_pdf_key))}")
-                st.write(f"- df_filial shape: {df_filial.shape}")
 
         # Tabela com checkboxes inline
         sel_ciclos = []
