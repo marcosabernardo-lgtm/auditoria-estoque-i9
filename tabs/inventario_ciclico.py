@@ -594,43 +594,35 @@ def render(df_jlle, df_outras, formatar_br):
     if etapa_nav == 1:
         st.markdown("### 1. Gerar lista do ciclo")
 
-        # ── Filtros internos ──────────────────────────────────────────────
-        col_e, col_f, col_btn = st.columns([2, 2, 1])
-        with col_e:
-            empresas_disp = sorted(df_jlle["Empresa"].dropna().unique())
-            emp_idx = empresas_disp.index(empresa_sel) if empresa_sel in empresas_disp else None
-            emp_novo = st.selectbox("🏢 Empresa", [""] + empresas_disp,
-                                    index=0 if emp_idx is None else emp_idx + 1,
-                                    key="ic_emp_input")
-        with col_f:
-            if emp_novo:
-                filiais_disp = sorted(df_jlle[df_jlle["Empresa"]==emp_novo]["Filial"].dropna().unique())
-                fil_idx = filiais_disp.index(filial_sel) if filial_sel in filiais_disp else None
-                fil_novo = st.selectbox("📍 Filial", [""] + filiais_disp,
-                                        index=0 if fil_idx is None else fil_idx + 1,
-                                        key="ic_fil_input")
-            else:
-                st.selectbox("📍 Filial", [""], key="ic_fil_input", disabled=True)
-                fil_novo = ""
+        # Empresa/filial já definidos pelo app.py — apenas confirma com botão
+        if not empresa_sel or not filial_sel:
+            st.info("👆 Selecione a Empresa e a Filial na tela inicial para começar.")
+            return
+
+        col_info, col_btn = st.columns([4, 1])
+        with col_info:
+            st.markdown(
+                f"""<div style="background:#004550;border-radius:8px;padding:10px 16px;margin-bottom:8px;">
+                  <span style="color:#aac8cc;font-size:0.85rem;">🏢 Empresa</span>
+                  <span style="color:#fff;font-weight:700;margin:0 16px;">{empresa_sel}</span>
+                  <span style="color:#aac8cc;font-size:0.85rem;">📍 Filial</span>
+                  <span style="color:#fff;font-weight:700;margin-left:8px;">{filial_sel}</span>
+                </div>""", unsafe_allow_html=True)
         with col_btn:
-            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+            st.markdown("<div style='margin-top:4px'>", unsafe_allow_html=True)
             btn_gerar = st.button("🔍 Gerar lista", type="primary", use_container_width=True, key="ic_btn_gerar")
             st.markdown("</div>", unsafe_allow_html=True)
 
         if btn_gerar:
-            if not emp_novo or not fil_novo:
-                st.warning("⚠️ Selecione Empresa e Filial antes de gerar a lista.")
-                st.stop()
-            st.session_state["ic_empresa_sel"] = emp_novo
-            st.session_state["ic_filial_sel"]  = fil_novo
-            # Invalida cache para forçar releitura
-            _ck = f"ic_cache_{emp_novo}_{fil_novo}"
-            st.session_state.pop(f"{_ck}_ts", None)
+            st.session_state["ic_empresa_sel"] = empresa_sel
+            st.session_state["ic_filial_sel"]  = filial_sel
+            _ck = f"ic_cache_{empresa_sel}_{filial_sel}"
+            st.session_state.pop(_ck, None)
             st.rerun()
 
         # Só mostra métricas e lista se empresa/filial já estiverem selecionadas
-        if not empresa_sel or not filial_sel or df_filial.empty:
-            st.info("👆 Selecione a Empresa e a Filial acima e clique em **Gerar lista** para começar.")
+        if df_filial.empty:
+            st.info("👆 Clique em **Gerar lista** para carregar os dados.")
             return
 
         data_aud = st.session_state.get("_data_auditoria")
@@ -1037,6 +1029,13 @@ def render(df_jlle, df_outras, formatar_br):
             df_c  = dfs_rel_todos.get(num_c, pd.DataFrame())
             n_sku = len(df_c) if not df_c.empty else c.get("qtd_contados", len(c.get("produtos_contados",[])))
 
+            # Pré-gera o PDF na primeira vez que a etapa é carregada
+            # (evita depender de rerun para mostrar o download_button)
+            _pdf_key = f"_pdf5_bytes_{num_c}"
+            if _pdf_key not in st.session_state:
+                pdf_b = gerar_pdf_kpmg_consolidado([c], dfs_rel_todos, empresa_sel, filial_sel)
+                st.session_state[_pdf_key] = pdf_b  # None se ReportLab indisponível
+
             ck, cc, cd, cr, ca, cs, ccob, cst, cpdf = st.columns(
                 [0.5, 2.5, 1.5, 2.5, 1.2, 1, 1.2, 1.2, 1.5])
             checked = ck.checkbox("", key=f"ck5_{num_c}", label_visibility="collapsed")
@@ -1048,21 +1047,18 @@ def render(df_jlle, df_outras, formatar_br):
             ccob.caption(f"{c.get('cobertura_pct',0):.1f}%")
             cst.caption(c.get("status","—"))
 
-            # Botão PDF individual (sempre disponível, independente do checkbox)
-            if cpdf.button("📄", key=f"pdf5_ind_{num_c}", help=f"PDF — {num_c}"):
-                pdf_b = gerar_pdf_kpmg_consolidado([c], dfs_rel_todos, empresa_sel, filial_sel)
-                if pdf_b:
-                    st.session_state[f"_pdf5_bytes_{num_c}"] = pdf_b
-                    st.session_state[f"_pdf5_nome_{num_c}"]  = f"kpmg_{num_c}.pdf"
-
-            # Download aparece logo abaixo se gerado
-            if st.session_state.get(f"_pdf5_bytes_{num_c}"):
-                st.download_button(
-                    f"⬇ {num_c}",
-                    data=st.session_state[f"_pdf5_bytes_{num_c}"],
-                    file_name=st.session_state[f"_pdf5_nome_{num_c}"],
+            # Download direto — sem botão intermediário
+            pdf_pronto = st.session_state.get(_pdf_key)
+            if pdf_pronto:
+                cpdf.download_button(
+                    "📄",
+                    data=pdf_pronto,
+                    file_name=f"kpmg_{num_c}.pdf",
                     mime="application/pdf",
-                    key=f"dl5_{num_c}")
+                    key=f"dl5_{num_c}",
+                    help=f"Baixar PDF — {num_c}")
+            else:
+                cpdf.caption("—")
 
             if checked:
                 sel_ciclos.append(c)
@@ -1071,32 +1067,25 @@ def render(df_jlle, df_outras, formatar_br):
         st.markdown("---")
         if len(sel_ciclos) >= 2:
             st.info(f"**{len(sel_ciclos)} ciclos selecionados** — o PDF será consolidado.")
-            if st.button("📄 Gerar PDF Consolidado", type="primary", key="btn_pdf_consol"):
-                pdf_b = gerar_pdf_kpmg_consolidado(sel_ciclos, dfs_rel_todos, empresa_sel, filial_sel)
-                if pdf_b:
-                    nomes = "_".join(c.get("num_ciclo","") for c in sel_ciclos[:2])
-                    st.download_button(
-                        "⬇ Baixar PDF Consolidado",
-                        data=pdf_b,
-                        file_name=f"kpmg_consolidado_{nomes}.pdf",
-                        mime="application/pdf",
-                        key="dl5_consol")
-                else:
-                    st.error("⚠️ ReportLab não disponível. Adicione `reportlab` ao requirements.txt.")
+            pdf_b = gerar_pdf_kpmg_consolidado(sel_ciclos, dfs_rel_todos, empresa_sel, filial_sel)
+            if pdf_b:
+                nomes = "_".join(c.get("num_ciclo","") for c in sel_ciclos[:2])
+                st.download_button(
+                    "📄 Baixar PDF Consolidado",
+                    data=pdf_b,
+                    file_name=f"kpmg_consolidado_{nomes}.pdf",
+                    mime="application/pdf",
+                    key="dl5_consol",
+                    type="primary")
+            else:
+                st.error("⚠️ ReportLab não disponível. Adicione `reportlab` ao requirements.txt.")
         elif len(sel_ciclos) == 1:
-            st.info("1 ciclo selecionado — clique em 📄 na linha ou selecione mais para consolidar.")
+            st.info("1 ciclo selecionado — selecione mais para consolidar.")
 
-        col_dl, col_rs = st.columns([3, 1])
-        with col_dl:
-            st.download_button(
-                "📥 Exportar Histórico (Excel)",
-                data=gerar_xlsx_historico(ciclos, label),
-                file_name=f"historico_kpmg_{empresa_sel}_{filial_sel}_{date.today().strftime('%d%m%Y')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="ic_dl_hist5")
-        with col_rs:
-            if st.button("🔄 Novo período", key="ic_reset5"):
-                db_resetar_tudo(engine_db, empresa_sel, filial_sel)
-                st.session_state["ic_etapa_nav"] = 1
-                st.success("Novo período iniciado!")
-                st.rerun()
+        st.markdown("---")
+        if st.button("🔄 Novo período", key="ic_reset5"):
+            db_resetar_tudo(engine_db, empresa_sel, filial_sel)
+            st.session_state["ic_etapa_nav"] = 1
+            st.success("Novo período iniciado!")
+            st.rerun()
+
