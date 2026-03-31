@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-from sqlalchemy import create_engine
+from datetime import datetime as _dt
+from sqlalchemy import create_engine, text
 from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, buscar_movimentacoes_por_documento, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
 from processador_auditoria import cruzar_wms_erp
 
@@ -63,24 +64,51 @@ def get_engine():
     try:
         from sqlalchemy.pool import NullPool
         url = st.secrets["connections"]["postgresql"]["url"]
-        # Streamlit Cloud não suporta IPv6 — usa pooler na porta 5432 (modo session)
-        # Troca porta 6543 (transaction mode) por 5432 (session mode) no pooler
         url = url.replace(":6543/", ":5432/")
         return create_engine(url, poolclass=NullPool)
     except: return None
 
-def carregar_do_banco(tabela):
+@st.cache_data(ttl=3600, show_spinner=False)
+def carregar_empresas_filiais():
+    """Consulta leve — só Empresa+Filial distintos para montar a tela de seleção."""
+    engine = get_engine()
+    if engine is None: return [], {}
+    try:
+        df = pd.read_sql(
+            'SELECT DISTINCT "Empresa", "Filial" FROM auditoria ORDER BY "Empresa", "Filial"',
+            engine
+        )
+        empresas = sorted(df["Empresa"].dropna().unique().tolist())
+        mapa = {e: sorted(df[df["Empresa"] == e]["Filial"].dropna().unique().tolist()) for e in empresas}
+        return empresas, mapa
+    except:
+        return [], {}
+
+@st.cache_data(ttl=300, show_spinner=False)
+def carregar_auditoria_filtrada(empresa: str, filial: str):
+    """Carrega só empresa+filial selecionada — cache de 5 min. Não faz SELECT *."""
     engine = get_engine()
     if engine is None: return None
-    try: return pd.read_sql(f"SELECT * FROM {tabela}", engine)
-    except: return None
+    try:
+        df = pd.read_sql(
+            'SELECT * FROM auditoria WHERE "Empresa" = %(empresa)s AND "Filial" = %(filial)s',
+            engine,
+            params={"empresa": empresa, "filial": filial}
+        )
+        return df if not df.empty else None
+    except:
+        return None
 
 def formatar_br(valor):
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- SIDEBAR ---
+# ─── SIDEBAR — Upload sempre visível ────────────────────────────────────────
 with st.sidebar:
-    st.header("⚙️ Atualizar Bases")
+    st.markdown(
+        '<div style="color:#EC6E21;font-weight:700;font-size:1.1rem;margin-bottom:12px;">⚙️ Atualizar Bases</div>',
+        unsafe_allow_html=True
+    )
+
     with st.expander("1. Auditoria"):
         u_wms = st.file_uploader("WMS", type=["xlsx"], key="up_wms")
         u_erp = st.file_uploader("ERP", type=["xlsx"], key="up_erp")
@@ -91,18 +119,21 @@ with st.sidebar:
                     if df_auditoria.empty:
                         st.error("Cruzamento resultou em dados vazios. Verifique os arquivos.")
                     else:
-                        # Diagnóstico por empresa
                         resumo = df_auditoria.groupby("Empresa")["Produto"].count().reset_index()
                         resumo.columns = ["Empresa", "Linhas"]
                         st.dataframe(resumo, use_container_width=True, hide_index=True)
                         engine = get_engine()
                         if engine:
                             df_auditoria.to_sql("auditoria", engine, if_exists="replace", index=False)
+                            # Invalida caches para refletir novos dados
+                            carregar_empresas_filiais.clear()
+                            carregar_auditoria_filtrada.clear()
                             st.success(f"✅ {len(df_auditoria)} linhas gravadas!")
                         else:
                             st.error("Sem conexão com o banco.")
                 except Exception as e:
                     st.error(f"Erro ao processar: {e}")
+
     with st.expander("2. Notas Fiscais"):
         u_movs = st.file_uploader("Arquivos Protheus", type=["xlsx"], accept_multiple_files=True)
         if u_movs and st.button("📦 Processar Movimentações"):
@@ -112,100 +143,136 @@ with st.sidebar:
                 df_nf_novo.to_sql("movimentacoes", get_engine(), if_exists="append", index=False)
                 st.success("Enviado!")
 
-# --- CORPO PRINCIPAL ---
+    # Botão "Trocar empresa/filial" — só aparece após seleção
+    if st.session_state.get("_app_empresa"):
+        st.markdown("---")
+        st.caption(f"🏢 **{st.session_state['_app_empresa']}**")
+        st.caption(f"📍 {st.session_state.get('_app_filial', '—')}")
+        if st.button("🔄 Trocar empresa/filial", use_container_width=True):
+            for k in ["_app_empresa", "_app_filial", "_data_auditoria"]:
+                st.session_state.pop(k, None)
+            st.rerun()
+
+# ─── CORPO PRINCIPAL ─────────────────────────────────────────────────────────
 st.markdown('<div class="main-title">Gestão Integrada I9</div>', unsafe_allow_html=True)
-df_base = carregar_do_banco("auditoria")
-if df_base is not None:
-    from datetime import datetime as _dt
-    st.session_state["_data_auditoria"] = _dt.now().strftime("%d/%m/%Y %H:%M")
 
+# ── TELA DE SELEÇÃO ──────────────────────────────────────────────────────────
+if not st.session_state.get("_app_empresa"):
+    empresas, mapa_filiais = carregar_empresas_filiais()
 
-if df_base is not None:
+    if not empresas:
+        st.info("💡 Nenhum dado encontrado. Carregue os arquivos WMS e ERP na sidebar para começar.")
+        st.stop()
 
-    # Filtros
-    c1, c2, c3 = st.columns(3)
-    with c1: f_emp = st.radio("🏢 Empresa", ["Todas"] + sorted(df_base["Empresa"].unique().tolist()), horizontal=True)
-    df_t1 = df_base if f_emp == "Todas" else df_base[df_base["Empresa"] == f_emp]
-    with c2:
-        dict_filiais = {"Todas": "Todas"}
-        for f in sorted(df_t1["Filial"].unique().tolist()): dict_filiais[f.split(" - ")[-1] if " - " in f else f] = f
-        f_fil_curta = st.radio("📍 Filial", list(dict_filiais.keys()), horizontal=True)
-        f_fil_longa = dict_filiais[f_fil_curta]
-    df_t2 = df_t1 if f_fil_longa == "Todas" else df_t1[df_t1["Filial"] == f_fil_longa]
-    with c3: f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
+    # Card de seleção centralizado
+    _, col_c, _ = st.columns([1, 2, 1])
+    with col_c:
+        st.markdown(
+            """<div style="background:#004550;border:2px solid #EC6E21;border-radius:16px;
+                          padding:36px 40px;margin-top:40px;">
+               <div style="color:#fff;font-size:1.3rem;font-weight:700;margin-bottom:4px;">
+                 Selecionar empresa e filial
+               </div>
+               <div style="color:#aac8cc;font-size:0.88rem;margin-bottom:24px;">
+                 Escolha o contexto para carregar os dados de auditoria.
+               </div>
+            </div>""",
+            unsafe_allow_html=True
+        )
+        emp_input = st.selectbox("🏢 Empresa", empresas, key="sel_empresa")
+        filiais_disp = mapa_filiais.get(emp_input, [])
+        fil_input = st.selectbox("📍 Filial", filiais_disp, key="sel_filial")
 
-    f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o código...")
-    dff = df_t2 if f_stat == "Todos" else df_t2[df_t2["Status"] == f_stat]
-    if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
+        if st.button("▶  Entrar", type="primary", use_container_width=True, key="btn_entrar"):
+            st.session_state["_app_empresa"]    = emp_input
+            st.session_state["_app_filial"]     = fil_input
+            st.session_state["_data_auditoria"] = _dt.now().strftime("%d/%m/%Y %H:%M")
+            st.rerun()
 
-    # Separação Joinville x Outras Filiais
-    # Classificação exata conforme tabela de referência
-    # Sempre sem acento — processador normaliza antes de gravar no banco
-    lista_joinville = [
-        "Tools - Filial",
-        "Maquinas - Filial",
-        "Service - Matriz",
-        "Service - Filial",
+    st.stop()
+
+# ── DADOS JÁ SELECIONADOS ────────────────────────────────────────────────────
+empresa_sel = st.session_state["_app_empresa"]
+filial_sel  = st.session_state["_app_filial"]
+
+# Cache: mesma empresa+filial = sem nova consulta ao banco
+df_base = carregar_auditoria_filtrada(empresa_sel, filial_sel)
+
+if df_base is None or df_base.empty:
+    st.warning(
+        f"⚠️ Nenhum dado encontrado para **{empresa_sel} / {filial_sel}**. "
+        "Verifique se o upload foi feito corretamente."
+    )
+    st.stop()
+
+st.session_state["_data_auditoria"] = st.session_state.get("_data_auditoria", _dt.now().strftime("%d/%m/%Y %H:%M"))
+
+# Filtro de status e código (empresa/filial já fixados pela seleção)
+c1, c2 = st.columns([2, 2])
+with c1: f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
+with c2: f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o código...")
+
+dff = df_base if f_stat == "Todos" else df_base[df_base["Status"] == f_stat]
+if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
+
+# Separação Joinville x Outras Filiais
+lista_joinville = ["Tools - Filial", "Maquinas - Filial", "Service - Matriz", "Service - Filial"]
+lista_outras    = ["Tools - Matriz", "Maquinas - Matriz", "Maquinas - Jundiai",
+                   "Robotica - Matriz", "Robotica - Jaragua", "Service - Caxias", "Service - Jundiai"]
+
+dff_jlle   = dff[dff["Filial"].isin(lista_joinville)].copy()
+dff_outras = dff[dff["Filial"].isin(lista_outras)].copy()
+dff_jlle["Filial"]   = dff_jlle["Filial"].str.split(" - ").str[-1]
+dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
+
+# Fallback: se filial não bate com as listas (ex: dado sem prefixo), usa dff completo
+if dff_jlle.empty and dff_outras.empty:
+    sufixo = filial_sel.split(" - ")[-1]
+    sufixos_jlle  = {f.split(" - ")[-1] for f in lista_joinville}
+    sufixos_outras = {f.split(" - ")[-1] for f in lista_outras}
+    if sufixo in sufixos_jlle:
+        dff_jlle   = dff.copy()
+        dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
+    elif sufixo in sufixos_outras:
+        dff_outras = dff.copy()
+        dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
+
+def preparar_view(df):
+    if df.empty: return df
+    df_v = df.copy()
+    if "Qtd_Locais" in df_v.columns:
+        df_v = df_v.rename(columns={"Qtd_Locais": "Qtd Locais"})
+    elif "Produto" in df_v.columns:
+        df_v["Qtd Locais"] = df_v.groupby("Produto")["Produto"].transform("count").astype(int)
+    ordem = [
+        "Status", "Empresa", "Filial", "Localização", "Armazem",
+        "Produto", "Qtd Locais", "Descrição", "Vl Unit",
+        "Saldo ERP (Total)", "Saldo ERP (Rateado)", "Saldo WMS",
+        "Divergência", "Vl Divergência", "Vl Total ERP",
     ]
-    lista_outras = [
-        "Tools - Matriz",
-        "Maquinas - Matriz",
-        "Maquinas - Jundiai",
-        "Robotica - Matriz",
-        "Robotica - Jaragua",
-        "Service - Caxias",
-        "Service - Jundiai",
-    ]
-    dff_jlle   = dff[ dff["Filial"].isin(lista_joinville)].copy()
-    dff_outras = dff[ dff["Filial"].isin(lista_outras)].copy()
-    # Mantém só o sufixo para exibição (ex: "Maquinas - Filial" → "Filial")
-    dff_jlle["Filial"]   = dff_jlle["Filial"].str.split(" - ").str[-1]
-    dff_outras["Filial"] = dff_outras["Filial"].str.split(" - ").str[-1]
+    colunas_ok = [c for c in ordem if c in df_v.columns]
+    resto = [c for c in df_v.columns if c not in colunas_ok]
+    return df_v[colunas_ok + resto]
 
-    # Reordenar colunas — dados já vêm com rateio correto do processador_auditoria
-    def preparar_view(df):
-        if df.empty: return df
-        df_v = df.copy()
-        # Qtd Locais: usa coluna do banco se existir, senão calcula
-        if "Qtd_Locais" in df_v.columns:
-            df_v = df_v.rename(columns={"Qtd_Locais": "Qtd Locais"})
-        elif "Produto" in df_v.columns:
-            df_v["Qtd Locais"] = df_v.groupby("Produto")["Produto"].transform("count").astype(int)
-        # Ordem de colunas amigável
-        ordem = [
-            "Status", "Empresa", "Filial", "Localização", "Armazem",
-            "Produto", "Qtd Locais", "Descrição", "Vl Unit",
-            "Saldo ERP (Total)", "Saldo ERP (Rateado)", "Saldo WMS",
-            "Divergência", "Vl Divergência", "Vl Total ERP",
-        ]
-        colunas_ok = [c for c in ordem if c in df_v.columns]
-        resto = [c for c in df_v.columns if c not in colunas_ok]
-        return df_v[colunas_ok + resto]
+v_jlle_view   = preparar_view(dff_jlle)
+v_outras_view = preparar_view(dff_outras)
 
-    v_jlle_view = preparar_view(dff_jlle)
-    v_outras_view = preparar_view(dff_outras)
+# Injeta dependências para uso nas abas
+from tabs.movimentacoes import _tratar_df as _tratar_mov
+st.session_state["_engine"]          = get_engine()
+st.session_state["_buscar_func"]     = buscar_movimentacoes_nuvem
+st.session_state["_buscar_doc_func"] = buscar_movimentacoes_por_documento
+st.session_state["_estilizar_func"]  = estilizar_tabela
+st.session_state["_to_float_func"]   = to_float_br
+st.session_state["_tratar_df"]       = _tratar_mov
 
+tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🔄 Inv. Cíclico"])
 
-
-    # CHAMADA DAS ABAS
-    # Injeta dependências para uso nas abas
-    from tabs.movimentacoes import _tratar_df as _tratar_mov
-    st.session_state["_engine"]         = get_engine()
-    st.session_state["_buscar_func"]    = buscar_movimentacoes_nuvem
-    st.session_state["_buscar_doc_func"]= buscar_movimentacoes_por_documento
-    st.session_state["_estilizar_func"] = estilizar_tabela
-    st.session_state["_to_float_func"]  = to_float_br
-    st.session_state["_tratar_df"]      = _tratar_mov
-
-    tab1, tab2, tab3, tab4 = st.tabs(["📍 Joinville", "🚛 Filiais", "📊 Indicadores", "🔄 Inv. Cíclico"])
-
-    with tab1:
-        joinville.render(v_jlle_view, estilizar_tabela, para_excel)
-    with tab2:
-        filiais.render(v_outras_view, estilizar_tabela, para_excel)
-    with tab3:
-        indicadores.render(dff_jlle, formatar_br)
-    with tab4:
-        inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)
-else:
-    st.info("💡 Carregue os dados para começar.")
+with tab1:
+    joinville.render(v_jlle_view, estilizar_tabela, para_excel)
+with tab2:
+    filiais.render(v_outras_view, estilizar_tabela, para_excel)
+with tab3:
+    indicadores.render(dff_jlle, formatar_br)
+with tab4:
+    inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)

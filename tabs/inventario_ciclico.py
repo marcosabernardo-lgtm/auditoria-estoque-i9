@@ -373,21 +373,26 @@ def render(df_jlle, df_outras, formatar_br):
 
     engine_db = st.session_state.get("_engine")
 
-    # Cache leve de 5s — só carrega se empresa/filial já foram selecionados
+    # Cache no session_state — só recarrega do banco quando empresa/filial muda ou ic_force_reload
     if empresa_sel and filial_sel:
         _cache_key = f"ic_cache_{empresa_sel}_{filial_sel}"
-        if st.session_state.get(f"{_cache_key}_ts", 0) < __import__('time').time() - 5 or \
-                st.session_state.get("ic_force_reload", False):
+        _deve_recarregar = (
+            _cache_key not in st.session_state or
+            st.session_state.pop("ic_force_reload", False)
+        )
+        if _deve_recarregar:
             st.session_state[f"{_cache_key}_contados"]    = db_obter_contados(engine_db, empresa_sel, filial_sel)
             st.session_state[f"{_cache_key}_ciclos"]      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
             st.session_state[f"{_cache_key}_ciclo_ativo"] = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
-            st.session_state[f"{_cache_key}_ts"]          = __import__('time').time()
-            st.session_state.pop("ic_force_reload", None)
+            st.session_state[_cache_key] = True  # marca como carregado
         contados    = st.session_state.get(f"{_cache_key}_contados", {})
         ciclos      = st.session_state.get(f"{_cache_key}_ciclos", [])
         ciclo_ativo = st.session_state.get(f"{_cache_key}_ciclo_ativo")
         label       = f"{empresa_sel} — {filial_sel}"
         df_filial   = df_jlle[(df_jlle["Empresa"]==empresa_sel)&(df_jlle["Filial"]==filial_sel)].copy()
+        # df_filial vazio = empresa/filial sem sufixo — usa df_jlle inteiro
+        if df_filial.empty:
+            df_filial = df_jlle.copy()
     else:
         contados = {}; ciclos = []; ciclo_ativo = None
         label = ""; df_filial = pd.DataFrame()
@@ -756,6 +761,7 @@ def render(df_jlle, df_outras, formatar_br):
                         conn.commit()
                     del st.session_state["ic_upload_pendente"]
                     st.session_state["ic_force_reload"]=True
+                    st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
                     st.success(f"✅ Etapa adicionada! {len(up['produtos'])} produtos contados.")
                     st.rerun()
                 except Exception as err:
@@ -820,6 +826,7 @@ def render(df_jlle, df_outras, formatar_br):
                     st.session_state["ic_fechado_msg"]=True
                     st.session_state["ic_etapa_nav"]=1
                     st.session_state["ic_force_reload"]=True
+                    st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
                     st.rerun()
             else:
                 col_bt,col_ms = st.columns([1,3])
