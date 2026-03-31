@@ -415,7 +415,7 @@ def render(df_jlle, df_outras, formatar_br):
 
     # Cards
     st.markdown("---")
-    c1,c2,c3,c4 = st.columns(4)
+    c1,c2,c3,c4,c5 = st.columns(5)
     b1 = _card(c1,1,"Gerar lista","Define o ciclo e gera a lista",
                ativo=(etapa_nav==1), concluido=(ciclo_ativo is not None), chave="ic_n1")
     b2 = _card(c2,2,"Upload WMS","Importa o resultado do WMS",
@@ -424,11 +424,14 @@ def render(df_jlle, df_outras, formatar_br):
                ativo=(etapa_nav==3), concluido=(pct_ciclo>=100), chave="ic_n3")
     b4 = _card(c4,4,"Fechar inventário","Registra no histórico KPMG",
                ativo=(etapa_nav==4), concluido=(len(ciclos)>0), chave="ic_n4")
+    b5 = _card(c5,5,"Histórico","Relatórios PDF dos ciclos fechados",
+               ativo=(etapa_nav==5), concluido=False, chave="ic_n5")
 
     if b1: st.session_state["ic_etapa_nav"]=1; st.rerun()
     if b2: st.session_state["ic_etapa_nav"]=2; st.rerun()
     if b3: st.session_state["ic_etapa_nav"]=3; st.rerun()
     if b4: st.session_state["ic_etapa_nav"]=4; st.rerun()
+    if b5: st.session_state["ic_etapa_nav"]=5; st.rerun()
 
     st.markdown("---")
 
@@ -502,8 +505,8 @@ def render(df_jlle, df_outras, formatar_br):
         if modo == "Quantidade fixa":
             st.caption("📌 Conta um número fixo de produtos por ciclo.")
             cols_b = st.columns(4)
-            if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 2
-            for cb,qtd in zip(cols_b,[2,30,50,80]):
+            if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 30
+            for cb,qtd in zip(cols_b,[30,50,80,100]):
                 with cb:
                     if st.button(f"{qtd}",key=f"ic_q{qtd}",type="primary" if st.session_state.ic_qtd==qtd else "secondary"):
                         st.session_state.ic_qtd=qtd
@@ -627,11 +630,32 @@ def render(df_jlle, df_outras, formatar_br):
 
                 def _style_dif(val):
                     try:
-                        v = float(str(val).replace("R$","").replace(",","").replace(" ",""))
+                        v = float(str(val).replace("R$","").replace(",","").replace(" ","").replace("+","").replace("−","").replace("-",""))
+                        raw = str(val)
+                        neg = raw.startswith("-") or raw.startswith("−")
+                        if neg: return "color:#C0392B;font-weight:bold"
                         if v > 0: return "color:#C0392B;font-weight:bold"
                         if v < 0: return "color:#27AE60;font-weight:bold"
                     except: pass
                     return ""
+
+                def _fmt_dif(v):
+                    try:
+                        f = float(v)
+                        if f != 0:
+                            return f"-{abs(f):,.2f}" if f > 0 else f"+{abs(f):,.2f}"
+                        return f"{f:,.2f}"
+                    except:
+                        return v
+
+                def _fmt_vl_dif(v):
+                    try:
+                        f = float(v)
+                        if f != 0:
+                            return f"R$ -{abs(f):,.2f}" if f > 0 else f"R$ +{abs(f):,.2f}"
+                        return f"R$ {f:,.2f}"
+                    except:
+                        return v
 
                 st.dataframe(
                     df_exib_wms.style
@@ -640,9 +664,9 @@ def render(df_jlle, df_outras, formatar_br):
                         "Saldo ERP":       "{:,.2f}",
                         "Saldo WMS":       "{:,.2f}",
                         "Invent WMS":      "{:,.2f}",
-                        "Diferença Invent":"{:,.2f}",
+                        "Diferença Invent": _fmt_dif,
                         "Vl Total ERP":    "R$ {:,.2f}",
-                        "Vl Total Diferença": "R$ {:,.2f}"
+                        "Vl Total Diferença": _fmt_vl_dif
                     }, na_rep="—"),
                     use_container_width=True, hide_index=True)
 
@@ -808,51 +832,80 @@ def render(df_jlle, df_outras, formatar_br):
         else:
             st.info("Nenhum ciclo ativo no momento.")
 
-        if ciclos:
-            st.markdown("---")
-            with st.expander(f"📋 Histórico KPMG — {len(ciclos)} ciclo(s)"):
-                df_h = pd.DataFrame([{"Nº Ciclo":c.get("num_ciclo","—"),"Data Contagem":c.get("data","—"),
-                    "Responsável":c.get("responsavel","—"),"Acuracidade":c.get("acuracidade","—"),
-                    "SKUs Contados":c.get("qtd_contados",0),"Cobertura %":f"{c.get('cobertura_pct',0):.1f}%",
-                    "Status":c.get("status","—")} for c in ciclos])
-                st.dataframe(df_h, use_container_width=True, hide_index=True)
+    # ── ETAPA 5 — HISTÓRICO ───────────────────────────────────────────────
+    elif etapa_nav == 5:
+        if not empresa_sel or not filial_sel:
+            st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
+        st.markdown("### 5. Histórico KPMG")
 
-                # Botões PDF por ciclo
-                st.markdown("##### 📄 Relatório PDF por ciclo")
-                for c in ciclos:
-                    rel_json = c.get("relatorio_json", "[]")
-                    try:
-                        df_rel_c = pd.read_json(io.StringIO(rel_json), orient="records") if rel_json and rel_json != "[]" else pd.DataFrame()
-                    except Exception:
-                        df_rel_c = pd.DataFrame()
-                    num_c = c.get("num_ciclo","ciclo")
-                    col_pdf, col_info = st.columns([2, 3])
-                    with col_pdf:
-                        if not df_rel_c.empty:
-                            pdf_bytes = gerar_pdf_kpmg(c, df_rel_c, empresa_sel, filial_sel)
-                            if pdf_bytes:
-                                st.download_button(
-                                    f"📄 PDF — {num_c}",
-                                    data=pdf_bytes,
-                                    file_name=f"kpmg_{num_c}.pdf",
-                                    mime="application/pdf",
-                                    key=f"pdf_{num_c}")
-                            else:
-                                st.caption("⚠️ ReportLab não disponível")
-                        else:
-                            st.caption(f"Sem dados de relatório para {num_c}")
-                    with col_info:
-                        st.caption(f"{c.get('data','—')} · {c.get('responsavel','—')} · {c.get('acuracidade','—')} · Cobertura: {c.get('cobertura_pct',0):.1f}%")
+        if not ciclos:
+            st.info("Nenhum ciclo fechado ainda. Feche um inventário para ver o histórico aqui.")
+            return
 
-                st.markdown("---")
-                col_dl,col_rs = st.columns([3,1])
-                with col_dl:
-                    st.download_button("📥 Exportar Histórico KPMG",
-                        data=gerar_xlsx_historico(ciclos,label),
-                        file_name=f"historico_kpmg_{empresa_sel}_{filial_sel}_{date.today().strftime('%d%m%Y')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                with col_rs:
-                    if st.button("🔄 Novo período",key="ic_reset"):
-                        db_resetar_tudo(engine_db,empresa_sel,filial_sel)
-                        st.session_state["ic_etapa_nav"]=1
-                        st.success("Novo período iniciado!"); st.rerun()
+        # Tabela resumo
+        df_h = pd.DataFrame([{
+            "Nº Ciclo":       c.get("num_ciclo","—"),
+            "Data Contagem":  c.get("data","—"),
+            "Responsável":    c.get("responsavel","—"),
+            "Acuracidade":    c.get("acuracidade","—"),
+            "SKUs Contados":  c.get("qtd_contados", len(c.get("produtos_contados",[]))),
+            "Cobertura %":    f"{c.get('cobertura_pct',0):.1f}%",
+            "Status":         c.get("status","—"),
+        } for c in ciclos])
+        st.dataframe(df_h, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("##### 📄 Relatório PDF por ciclo")
+
+        for c in ciclos:
+            num_c = c.get("num_ciclo", "ciclo")
+            rel_json = c.get("relatorio_json", "[]")
+            try:
+                df_rel_c = pd.read_json(io.StringIO(rel_json), orient="records") \
+                           if rel_json and rel_json != "[]" else pd.DataFrame()
+            except Exception:
+                df_rel_c = pd.DataFrame()
+
+            # Se não tem relatorio_json salvo, tenta montar na hora via uploads
+            if df_rel_c.empty:
+                ups_c = c.get("uploads_raw", [])  # fallback
+                if ups_c and not df_filial.empty:
+                    df_rel_c = montar_df_relatorio(ups_c, df_filial)
+
+            col_pdf, col_info = st.columns([2, 4])
+            with col_pdf:
+                if not df_rel_c.empty:
+                    pdf_bytes = gerar_pdf_kpmg(c, df_rel_c, empresa_sel, filial_sel)
+                    if pdf_bytes:
+                        st.download_button(
+                            f"📄 PDF — {num_c}",
+                            data=pdf_bytes,
+                            file_name=f"kpmg_{num_c}.pdf",
+                            mime="application/pdf",
+                            key=f"pdf5_{num_c}")
+                    else:
+                        st.caption("⚠️ ReportLab não disponível")
+                else:
+                    st.caption(f"Sem dados de relatório para {num_c}")
+            with col_info:
+                n_itens = len(df_rel_c) if not df_rel_c.empty else "—"
+                st.caption(
+                    f"📅 {c.get('data','—')}  ·  👤 {c.get('responsavel','—')}  ·  "
+                    f"🎯 {c.get('acuracidade','—')}  ·  Cobertura: {c.get('cobertura_pct',0):.1f}%  ·  "
+                    f"Itens: {n_itens}")
+
+        st.markdown("---")
+        col_dl, col_rs = st.columns([3, 1])
+        with col_dl:
+            st.download_button(
+                "📥 Exportar Histórico KPMG (Excel)",
+                data=gerar_xlsx_historico(ciclos, label),
+                file_name=f"historico_kpmg_{empresa_sel}_{filial_sel}_{date.today().strftime('%d%m%Y')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="ic_dl_hist5")
+        with col_rs:
+            if st.button("🔄 Novo período", key="ic_reset5"):
+                db_resetar_tudo(engine_db, empresa_sel, filial_sel)
+                st.session_state["ic_etapa_nav"] = 1
+                st.success("Novo período iniciado!")
+                st.rerun()
