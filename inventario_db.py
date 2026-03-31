@@ -111,6 +111,7 @@ def db_gravar_ciclo(engine, empresa, filial, ciclo):
                 "uploads":          ciclo.get("uploads",1),
                 "relatorio_json":   ciclo.get("relatorio_json","[]"),
                 "produtos_contados":json.dumps(prods),
+                "erp_json":         ciclo.get("erp_json","[]"),
             })
             conn.commit()
     except Exception as ex:
@@ -227,3 +228,80 @@ def db_resetar_tudo(engine, empresa, filial):
     db_resetar_contados(engine, empresa, filial)
     db_resetar_ciclos(engine, empresa, filial)
     db_fechar_ciclo_ativo(engine, empresa, filial)
+
+
+# ── Justificativas ────────────────────────────────────────────────────────────
+
+def db_obter_justificativas(engine, empresa, filial, num_ciclo):
+    if engine is None: return {}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT produto, justificativa FROM inventario_justificativas
+                WHERE empresa=:e AND filial=:f AND num_ciclo=:c
+            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchall()
+        return {r[0]: r[1] for r in rows}
+    except Exception as ex:
+        logger.warning("db_obter_justificativas: %s", ex)
+        return {}
+
+
+def db_salvar_justificativas(engine, empresa, filial, num_ciclo, justificativas):
+    """justificativas = dict {produto: texto}"""
+    if engine is None or not justificativas: return
+    try:
+        with engine.connect() as conn:
+            for produto, texto in justificativas.items():
+                conn.execute(text("""
+                    INSERT INTO inventario_justificativas
+                        (empresa, filial, num_ciclo, produto, justificativa, atualizado_em)
+                    VALUES (:e,:f,:c,:p,:j,NOW())
+                    ON CONFLICT (empresa,filial,num_ciclo,produto)
+                    DO UPDATE SET justificativa=EXCLUDED.justificativa, atualizado_em=NOW()
+                """), {"e":empresa,"f":filial,"c":num_ciclo,"p":str(produto),"j":texto})
+            conn.commit()
+    except Exception as ex:
+        logger.warning("db_salvar_justificativas: %s", ex)
+
+
+# ── Upload ERP Protheus ───────────────────────────────────────────────────────
+
+def db_obter_erp_upload(engine, empresa, filial, num_ciclo):
+    if engine is None: return None
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT documento, data_upload, dados_json FROM inventario_erp_upload
+                WHERE empresa=:e AND filial=:f AND num_ciclo=:c LIMIT 1
+            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchone()
+        if row is None: return None
+        return {
+            "documento":   row[0],
+            "data_upload": str(row[1]) if row[1] else "",
+            "dados":       json.loads(row[2] or "[]"),
+        }
+    except Exception as ex:
+        logger.warning("db_obter_erp_upload: %s", ex)
+        return None
+
+
+def db_salvar_erp_upload(engine, empresa, filial, num_ciclo, documento, data_upload, dados):
+    """dados = lista de dicts com as linhas do Protheus"""
+    if engine is None: return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO inventario_erp_upload
+                    (empresa, filial, num_ciclo, documento, data_upload, dados_json, atualizado_em)
+                VALUES (:e,:f,:c,:doc,:data,:dados,NOW())
+                ON CONFLICT (empresa,filial,num_ciclo)
+                DO UPDATE SET documento=EXCLUDED.documento, data_upload=EXCLUDED.data_upload,
+                              dados_json=EXCLUDED.dados_json, atualizado_em=NOW()
+            """), {
+                "e":empresa,"f":filial,"c":num_ciclo,
+                "doc":documento,"data":data_upload,
+                "dados":json.dumps(dados, ensure_ascii=False),
+            })
+            conn.commit()
+    except Exception as ex:
+        logger.warning("db_salvar_erp_upload: %s", ex)

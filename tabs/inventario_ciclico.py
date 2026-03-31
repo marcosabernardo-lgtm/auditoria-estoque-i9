@@ -14,6 +14,8 @@ try:
         db_obter_ciclos, db_gravar_ciclo, db_resetar_ciclos,
         db_obter_ciclo_ativo, db_salvar_ciclo_ativo,
         db_acumular_upload, db_fechar_ciclo_ativo, db_resetar_tudo,
+        db_obter_justificativas, db_salvar_justificativas,
+        db_obter_erp_upload, db_salvar_erp_upload,
     )
     DB_DISPONIVEL = True
 except ImportError:
@@ -586,27 +588,37 @@ def render(df_jlle, df_outras, formatar_br):
     faltam    = pl_ciclo - ja_cont_ciclo
     pct_ciclo = len(ja_cont_ciclo & pl_ciclo) / len(pl_ciclo) * 100 if pl_ciclo else 0
 
+    # Estado do ERP upload para o ciclo ativo
+    erp_upload = db_obter_erp_upload(engine_db, empresa_sel, filial_sel,
+                  ciclo_ativo.get("num_ciclo","") if ciclo_ativo else "") if empresa_sel and filial_sel and ciclo_ativo else None
+
     etapa_nav = st.session_state.get("ic_etapa_nav", 1)
 
-    # Cards
+    # Cards — 7 etapas
     st.markdown("---")
-    c1,c2,c3,c4,c5 = st.columns(5)
-    b1 = _card(c1,1,"Gerar lista","Define o ciclo e gera a lista",
+    c1,c2,c3,c4,c5,c6,c7 = st.columns(7)
+    b1 = _card(c1,1,"Gerar lista",    "Define o ciclo e a lista",
                ativo=(etapa_nav==1), concluido=(ciclo_ativo is not None), chave="ic_n1")
-    b2 = _card(c2,2,"Upload WMS","Importa o resultado do WMS",
+    b2 = _card(c2,2,"Upload WMS",     "Importa resultado do WMS",
                ativo=(etapa_nav==2), concluido=(len(_uploads)>0), chave="ic_n2")
-    b3 = _card(c3,3,"Adicionar etapa","Confirma e acumula uploads",
+    b3 = _card(c3,3,"Add etapa",      "Confirma e acumula uploads",
                ativo=(etapa_nav==3), concluido=(pct_ciclo>=100), chave="ic_n3")
-    b4 = _card(c4,4,"Fechar inventário","Registra no histórico KPMG",
-               ativo=(etapa_nav==4), concluido=(len(ciclos)>0), chave="ic_n4")
-    b5 = _card(c5,5,"Histórico","Relatórios PDF dos ciclos fechados",
-               ativo=(etapa_nav==5), concluido=False, chave="ic_n5")
+    b4 = _card(c4,4,"Conferência",    "Divergências e justificativas",
+               ativo=(etapa_nav==4), concluido=False, chave="ic_n4")
+    b5 = _card(c5,5,"Upload ERP",     "Importa relatório Protheus",
+               ativo=(etapa_nav==5), concluido=(erp_upload is not None), chave="ic_n5")
+    b6 = _card(c6,6,"Fechar",         "Relatório final e fechamento",
+               ativo=(etapa_nav==6), concluido=(len(ciclos)>0), chave="ic_n6")
+    b7 = _card(c7,7,"Histórico",      "PDFs dos ciclos fechados",
+               ativo=(etapa_nav==7), concluido=False, chave="ic_n7")
 
     if b1: st.session_state["ic_etapa_nav"]=1; st.rerun()
     if b2: st.session_state["ic_etapa_nav"]=2; st.rerun()
     if b3: st.session_state["ic_etapa_nav"]=3; st.rerun()
     if b4: st.session_state["ic_etapa_nav"]=4; st.rerun()
     if b5: st.session_state["ic_etapa_nav"]=5; st.rerun()
+    if b6: st.session_state["ic_etapa_nav"]=6; st.rerun()
+    if b7: st.session_state["ic_etapa_nav"]=7; st.rerun()
 
     st.markdown("---")
 
@@ -931,68 +943,300 @@ def render(df_jlle, df_outras, formatar_br):
         else:
             st.info("Faça o upload na etapa **Upload WMS** primeiro, depois volte aqui para confirmar.")
 
-    # ── ETAPA 4 ───────────────────────────────────────────────────────────
+    # ── ETAPA 4 — CONFERÊNCIA (divergências + justificativas) ────────────
     elif etapa_nav == 4:
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
-        st.markdown("### 4. Fechar inventário")
+        st.markdown("### 4. Conferência de divergências")
+        st.caption("Revise as divergências entre WMS e ERP e registre justificativas por produto.")
+
+        if not ciclo_ativo:
+            st.warning("⚠️ Nenhum ciclo ativo. Gere a lista primeiro."); return
+
+        num_ciclo_conf = ciclo_ativo.get("num_ciclo","")
+
+        # Monta df de divergências a partir dos uploads do ciclo ativo
+        df_div = pd.DataFrame()
+        if _uploads and not df_filial.empty:
+            df_div = montar_df_relatorio(_uploads, df_filial)
+            if not df_div.empty and "Diferença Invent" in df_div.columns:
+                df_div = df_div[df_div["Diferença Invent"] != 0].copy()
+
+        if df_div.empty:
+            st.success("✅ Nenhuma divergência encontrada nos uploads realizados.")
+        else:
+            st.info(f"**{len(df_div)} produto(s) com divergência** — adicione justificativas abaixo.")
+
+            # Carrega justificativas já salvas
+            justs_salvas = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf)
+
+            cols_exib = [c for c in ["Produto","Descrição","Saldo ERP (Total)","Invent WMS",
+                                      "Diferença Invent","Vl Total Diferença"] if c in df_div.columns]
+            st.dataframe(
+                df_div[cols_exib].style
+                .applymap(lambda v: "color:#C0392B;font-weight:bold" if isinstance(v,(int,float)) and v > 0
+                          else ("color:#27AE60;font-weight:bold" if isinstance(v,(int,float)) and v < 0 else ""),
+                          subset=[c for c in ["Diferença Invent","Vl Total Diferença"] if c in cols_exib])
+                .format({
+                    "Saldo ERP (Total)": "{:,.2f}",
+                    "Invent WMS":        "{:,.2f}",
+                    "Diferença Invent":  lambda v: f"-{abs(v):,.2f}" if v > 0 else (f"+{abs(v):,.2f}" if v < 0 else "0,00"),
+                    "Vl Total Diferença":lambda v: f"R$ -{abs(v):,.2f}" if v > 0 else (f"R$ +{abs(v):,.2f}" if v < 0 else "R$ 0,00"),
+                }, na_rep="—"),
+                use_container_width=True, hide_index=True)
+
+            st.markdown("#### Justificativas")
+            st.caption("Preencha a justificativa para cada divergência. Deixe em branco se não houver.")
+
+            justs_edit = {}
+            prods_div = df_div["Produto"].astype(str).tolist()
+            desc_map  = dict(zip(df_div["Produto"].astype(str),
+                                 df_div.get("Descrição", pd.Series([""] * len(df_div))).tolist()))
+
+            cols_just = st.columns(2)
+            for i, prod in enumerate(prods_div):
+                col = cols_just[i % 2]
+                desc = str(desc_map.get(prod,""))[:50]
+                with col:
+                    val = col.text_input(
+                        f"**{prod}** — {desc}",
+                        value=justs_salvas.get(prod,""),
+                        key=f"just_{num_ciclo_conf}_{prod}",
+                        placeholder="Justificativa...")
+                    justs_edit[prod] = val
+
+            if st.button("💾 Salvar justificativas", type="primary", key="btn_salvar_just"):
+                db_salvar_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf, justs_edit)
+                st.success("✅ Justificativas salvas!")
+
+    # ── ETAPA 5 — UPLOAD ERP PROTHEUS ─────────────────────────────────────
+    elif etapa_nav == 5:
+        if not empresa_sel or not filial_sel:
+            st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
+        st.markdown("### 5. Upload do relatório ERP (Protheus)")
+        st.caption("Importe o Excel de inventário gerado pelo Protheus após a importação no ERP.")
+
+        if not ciclo_ativo:
+            st.warning("⚠️ Nenhum ciclo ativo. Gere a lista primeiro."); return
+
+        num_ciclo_erp = ciclo_ativo.get("num_ciclo","")
+
+        # Mostra upload já salvo se existir
+        erp_salvo = db_obter_erp_upload(engine_db, empresa_sel, filial_sel, num_ciclo_erp)
+        if erp_salvo:
+            st.success(f"✅ ERP já importado — Documento: **{erp_salvo.get('documento','—')}** · "
+                       f"Data: **{erp_salvo.get('data_upload','—')}** · "
+                       f"**{len(erp_salvo.get('dados',[]))} linhas**")
+            df_erp_prev = pd.DataFrame(erp_salvo["dados"])
+            if not df_erp_prev.empty:
+                st.dataframe(df_erp_prev.head(10), use_container_width=True, hide_index=True)
+            st.caption("Faça novo upload para substituir.")
+
+        arq_erp = st.file_uploader("Selecione o Excel do Protheus", type=["xlsx"], key=f"up_erp_{num_ciclo_erp}")
+        if arq_erp:
+            try:
+                df_erp = pd.read_excel(arq_erp, sheet_name=0, header=0)
+                # Normaliza colunas
+                df_erp.columns = [str(c).strip().upper() for c in df_erp.columns]
+                col_map = {
+                    "CODIGO":                  "Codigo",
+                    "DESCRICAO":               "Descricao",
+                    "TP":                      "Tipo",
+                    "GRUPO":                   "Grupo",
+                    "UM":                      "UM",
+                    "AMZ":                     "Armazem",
+                    "DOCUMENTO":               "Documento",
+                    "QUANTIDADE INVENTARIADA": "Qtd WMS",
+                    "QTD NA DATA DO INVENTARIO":"Qtd ERP",
+                    "DIFERENCA QUANTIDADE":    "Divergencia Qtd",
+                    "DIFERENCA VALOR":         "Divergencia Vl",
+                }
+                df_erp = df_erp.rename(columns={k:v for k,v in col_map.items() if k in df_erp.columns})
+                df_erp = df_erp.dropna(subset=["Codigo"])
+                df_erp["Codigo"] = df_erp["Codigo"].astype(str).str.zfill(6)
+
+                for col in ["Qtd WMS","Qtd ERP","Divergencia Qtd","Divergencia Vl"]:
+                    if col in df_erp.columns:
+                        df_erp[col] = pd.to_numeric(df_erp[col], errors="coerce").fillna(0)
+
+                documento = str(df_erp["Documento"].iloc[0]).strip() if "Documento" in df_erp.columns else "—"
+                data_up   = date.today().isoformat()
+
+                st.markdown(f"**{len(df_erp)} linhas** encontradas — Documento: `{documento}`")
+
+                # Preview
+                cols_prev = [c for c in ["Codigo","Descricao","Documento","Qtd WMS","Qtd ERP","Divergencia Qtd","Divergencia Vl"] if c in df_erp.columns]
+
+                def _style_erp(val):
+                    try:
+                        v = float(val)
+                        if v < 0: return "color:#C0392B;font-weight:bold"
+                        if v > 0: return "color:#27AE60;font-weight:bold"
+                    except: pass
+                    return ""
+
+                st.dataframe(
+                    df_erp[cols_prev].style
+                    .applymap(_style_erp, subset=[c for c in ["Divergencia Qtd","Divergencia Vl"] if c in cols_prev])
+                    .format({
+                        "Qtd WMS":        "{:,.2f}",
+                        "Qtd ERP":        "{:,.2f}",
+                        "Divergencia Qtd":"{:,.2f}",
+                        "Divergencia Vl": "R$ {:,.2f}",
+                    }, na_rep="—"),
+                    use_container_width=True, hide_index=True)
+
+                if st.button("💾 Salvar dados do ERP", type="primary", key="btn_salvar_erp"):
+                    db_salvar_erp_upload(engine_db, empresa_sel, filial_sel,
+                                         num_ciclo_erp, documento, data_up,
+                                         df_erp[cols_prev].to_dict("records"))
+                    st.success("✅ Dados do ERP salvos! Avance para **Fechar inventário**.")
+                    st.rerun()
+
+            except Exception as e:
+                st.error(f"Erro ao processar arquivo: {e}")
+
+    # ── ETAPA 6 — FECHAR INVENTÁRIO ───────────────────────────────────────
+    elif etapa_nav == 6:
+        if not empresa_sel or not filial_sel:
+            st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
+        st.markdown("### 6. Fechar inventário")
 
         if ciclo_ativo:
+            num_ciclo_fech = ciclo_ativo.get("num_ciclo","")
             st.markdown(
                 f"""<div style="background:#004550;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
                   <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <div><span style="color:#EC6E21;font-weight:bold;">📋 {ciclo_ativo["num_ciclo"]}</span><br>
+                    <div><span style="color:#EC6E21;font-weight:bold;">📋 {num_ciclo_fech}</span><br>
                     <span style="color:#fff;font-size:0.85rem;">Gerado em {ciclo_ativo["data_geracao"]} · {ciclo_ativo["qtd_lista"]} produtos · {len(_uploads)} upload(s)</span></div>
                     <span style="color:#EC6E21;font-weight:bold;font-size:1.2rem;">{pct_ciclo:.1f}%</span>
                   </div></div>""", unsafe_allow_html=True)
 
-            if pct_ciclo >= 100:
-                st.success("✅ 100% dos itens contados! Pronto para fechar.")
-                # Preview do relatório antes de fechar
-                _df_prev4 = montar_df_relatorio(_uploads, df_filial)
-                if not _df_prev4.empty:
-                    _pdf_prev4 = gerar_pdf_kpmg(
-                        {**ciclo_ativo,
-                         "data": _uploads[-1].get("data","—") if _uploads else "—",
-                         "responsavel": _uploads[-1].get("responsavel","—") if _uploads else "—",
-                         "acuracidade": _uploads[-1].get("acuracidade","—") if _uploads else "—",
-                         "cobertura_pct": pct_ciclo},
-                        _df_prev4, empresa_sel, filial_sel)
-                    if _pdf_prev4:
-                        st.download_button(
-                            "📄 Pré-visualizar Relatório PDF",
-                            data=_pdf_prev4,
-                            file_name=f"kpmg_preview_{ciclo_ativo.get('num_ciclo','')}.pdf",
-                            mime="application/pdf",
-                            key="ic_pdf_preview4"
-                        )
-                if st.button("🏁 Fechar inventário", key="ic_fechar", type="primary"):
-                    todos = set()
-                    for u in _uploads: todos.update(str(p).strip().zfill(6) for p in u.get("produtos",[]))
-                    data_iso = _uploads[-1].get("data_iso",date.today().isoformat()) if _uploads else date.today().isoformat()
-                    pct_f    = len(todos & pl_ciclo)/len(pl_ciclo)*100 if pl_ciclo else 0
-                    # Monta e serializa df_relatorio para guardar no ciclo
-                    df_rel   = montar_df_relatorio(_uploads, df_filial)
-                    rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
-                    cf = {**ciclo_ativo,"uploads":len(_uploads),"produtos_contados":list(todos),
-                          "cobertura_pct":pct_f,"status":"Concluído",
-                          "num_inv":_uploads[-1].get("num_inv","—") if _uploads else "—",
-                          "data":_uploads[-1].get("data","—") if _uploads else "—",
-                          "responsavel":_uploads[-1].get("responsavel","—") if _uploads else "—",
-                          "acuracidade":_uploads[-1].get("acuracidade","—") if _uploads else "—",
-                          "relatorio_json": rel_json}
-                    db_gravar_ciclo(engine_db,empresa_sel,filial_sel,cf)
-                    db_marcar_contados(engine_db,empresa_sel,filial_sel,list(todos),
-                                       data=data_iso,num_ciclo=ciclo_ativo.get("num_ciclo",""))
-                    db_fechar_ciclo_ativo(engine_db,empresa_sel,filial_sel)
-                    st.session_state["ic_fechado_msg"]=True
-                    st.session_state["ic_etapa_nav"]=1
-                    st.session_state["ic_force_reload"]=True
-                    st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
-                    st.rerun()
+            # Carrega dados ERP
+            erp_fech = db_obter_erp_upload(engine_db, empresa_sel, filial_sel, num_ciclo_fech)
+            df_erp_fech = pd.DataFrame(erp_fech["dados"]) if erp_fech and erp_fech.get("dados") else pd.DataFrame()
+
+            if df_erp_fech.empty:
+                st.warning("⚠️ Nenhum dado do ERP encontrado. Faça o **Upload ERP** (etapa 5) antes de fechar.")
             else:
-                col_bt,col_ms = st.columns([1,3])
-                with col_bt: st.button("🏁 Fechar inventário",key="ic_fbl",disabled=True)
+                st.success(f"✅ ERP carregado — {len(df_erp_fech)} produtos · Documento: **{erp_fech.get('documento','—')}**")
+
+            # Monta relatório final: ERP como base + WMS
+            if not df_erp_fech.empty:
+                df_fech = df_erp_fech.copy()
+                # Garante colunas numéricas
+                for col in ["Qtd WMS","Qtd ERP","Divergencia Qtd","Divergencia Vl"]:
+                    if col in df_fech.columns:
+                        df_fech[col] = pd.to_numeric(df_fech[col], errors="coerce").fillna(0)
+
+                # Cruza com ERP para pegar Vl Unit e calcular valores
+                vl_map = {}
+                if not df_filial.empty and "Produto" in df_filial.columns and "Vl Unit" in df_filial.columns:
+                    _vl = df_filial[["Produto","Vl Unit"]].copy()
+                    _vl["Produto"] = _vl["Produto"].astype(str).str.zfill(6)
+                    vl_map = _vl.drop_duplicates("Produto").set_index("Produto")["Vl Unit"].to_dict()
+
+                df_fech["Vl Unit"]   = df_fech["Codigo"].map(lambda p: vl_map.get(str(p).zfill(6), 0))
+                df_fech["Vl WMS"]    = df_fech["Qtd WMS"]         * df_fech["Vl Unit"]
+                df_fech["Vl ERP"]    = df_fech["Qtd ERP"]         * df_fech["Vl Unit"]
+
+                # Monta tabela no formato pedido
+                cols_rel = [c for c in ["Codigo","Descricao","Documento",
+                                         "Qtd WMS","Vl WMS","Qtd ERP","Vl ERP",
+                                         "Divergencia Qtd","Divergencia Vl"] if c in df_fech.columns]
+                df_rel_fech = df_fech[cols_rel].rename(columns={
+                    "Codigo":        "Código",
+                    "Descricao":     "Descrição",
+                    "Documento":     "Documento",
+                    "Qtd WMS":       "Qtd WMS",
+                    "Vl WMS":        "Vl WMS",
+                    "Qtd ERP":       "Qtd ERP",
+                    "Vl ERP":        "Vl ERP",
+                    "Divergencia Qtd":"Divergência",
+                    "Divergencia Vl": "Vl Divergência",
+                })
+
+                def _style_fech(val):
+                    try:
+                        v = float(val)
+                        if v < 0: return "color:#C0392B;font-weight:bold"
+                        if v > 0: return "color:#27AE60;font-weight:bold"
+                    except: pass
+                    return ""
+
+                st.markdown("#### Relatório de fechamento")
+                st.dataframe(
+                    df_rel_fech.style
+                    .applymap(_style_fech, subset=[c for c in ["Divergência","Vl Divergência"] if c in df_rel_fech.columns])
+                    .format({
+                        "Qtd WMS":       "{:,.2f}",
+                        "Vl WMS":        "R$ {:,.2f}",
+                        "Qtd ERP":       "{:,.2f}",
+                        "Vl ERP":        "R$ {:,.2f}",
+                        "Divergência":   "{:,.2f}",
+                        "Vl Divergência":"R$ {:,.2f}",
+                    }, na_rep="—"),
+                    use_container_width=True, hide_index=True)
+
+                # KPIs de resumo
+                c1f,c2f,c3f,c4f = st.columns(4)
+                c1f.metric("Total produtos", len(df_rel_fech))
+                n_div_f = int((df_rel_fech["Divergência"] != 0).sum()) if "Divergência" in df_rel_fech.columns else 0
+                c2f.metric("Divergentes", n_div_f)
+                vl_div_f = df_rel_fech["Vl Divergência"].sum() if "Vl Divergência" in df_rel_fech.columns else 0
+                c3f.metric("Vl Total Divergência", f"R$ {vl_div_f:,.2f}")
+                c4f.metric("Cobertura WMS", f"{pct_ciclo:.1f}%")
+
+            if pct_ciclo >= 100:
+                if not df_erp_fech.empty:
+                    st.success("✅ 100% contados e ERP importado! Pronto para fechar.")
+                    # PDF preview
+                    _df_prev6 = montar_df_relatorio(_uploads, df_filial)
+                    _pdf_prev6 = gerar_pdf_kpmg(
+                        {**ciclo_ativo,
+                         "data":         _uploads[-1].get("data","—") if _uploads else "—",
+                         "responsavel":  _uploads[-1].get("responsavel","—") if _uploads else "—",
+                         "acuracidade":  _uploads[-1].get("acuracidade","—") if _uploads else "—",
+                         "cobertura_pct":pct_ciclo},
+                        _df_prev6, empresa_sel, filial_sel) if not _df_prev6.empty else None
+                    if _pdf_prev6:
+                        st.download_button("📄 Pré-visualizar PDF",
+                            data=_pdf_prev6,
+                            file_name=f"kpmg_preview_{num_ciclo_fech}.pdf",
+                            mime="application/pdf", key="ic_pdf_preview6")
+                else:
+                    st.warning("⚠️ Faça o Upload ERP (etapa 5) antes de fechar.")
+
+                if not df_erp_fech.empty:
+                    if st.button("🏁 Fechar inventário", key="ic_fechar", type="primary"):
+                        todos = set()
+                        for u in _uploads: todos.update(str(p).strip().zfill(6) for p in u.get("produtos",[]))
+                        data_iso = _uploads[-1].get("data_iso",date.today().isoformat()) if _uploads else date.today().isoformat()
+                        pct_f    = len(todos & pl_ciclo)/len(pl_ciclo)*100 if pl_ciclo else 0
+                        df_rel   = montar_df_relatorio(_uploads, df_filial)
+                        # Inclui dados do ERP no relatorio_json
+                        rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
+                        erp_json = df_erp_fech.to_json(orient="records", force_ascii=False) if not df_erp_fech.empty else "[]"
+                        cf = {**ciclo_ativo, "uploads":len(_uploads), "produtos_contados":list(todos),
+                              "cobertura_pct":pct_f, "status":"Concluído",
+                              "num_inv":    _uploads[-1].get("num_inv","—") if _uploads else "—",
+                              "data":       _uploads[-1].get("data","—") if _uploads else "—",
+                              "responsavel":_uploads[-1].get("responsavel","—") if _uploads else "—",
+                              "acuracidade":_uploads[-1].get("acuracidade","—") if _uploads else "—",
+                              "relatorio_json": rel_json,
+                              "erp_json":       erp_json}
+                        db_gravar_ciclo(engine_db, empresa_sel, filial_sel, cf)
+                        db_marcar_contados(engine_db, empresa_sel, filial_sel, list(todos),
+                                           data=data_iso, num_ciclo=ciclo_ativo.get("num_ciclo",""))
+                        db_fechar_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+                        st.session_state["ic_fechado_msg"]  = True
+                        st.session_state["ic_etapa_nav"]    = 1
+                        st.session_state["ic_force_reload"] = True
+                        st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
+                        st.rerun()
+            else:
+                col_bt, col_ms = st.columns([1,3])
+                with col_bt: st.button("🏁 Fechar inventário", key="ic_fbl", disabled=True)
                 with col_ms:
                     fl = sorted(list(faltam))[:10]
                     ms = len(faltam)-10 if len(faltam)>10 else 0
@@ -1002,10 +1246,10 @@ def render(df_jlle, df_outras, formatar_br):
             st.info("Nenhum ciclo ativo no momento.")
 
     # ── ETAPA 5 — HISTÓRICO ───────────────────────────────────────────────
-    elif etapa_nav == 5:
+    elif etapa_nav == 7:
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
-        st.markdown("### 5. Histórico KPMG")
+        st.markdown("### 7. Histórico KPMG")
 
         if not ciclos:
             st.info("Nenhum ciclo fechado ainda. Feche um inventário para ver o histórico aqui.")
