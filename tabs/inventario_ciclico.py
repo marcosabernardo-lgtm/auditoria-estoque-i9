@@ -605,8 +605,9 @@ def render(df_jlle, df_outras, formatar_br):
                ativo=(etapa_nav==2), concluido=(len(_uploads)>0), chave="ic_n2")
     b3 = _card(c3,3,"Add etapa",      "Confirma e acumula uploads",
                ativo=(etapa_nav==3), concluido=(pct_ciclo>=100), chave="ic_n3")
+    _conf_concluida = st.session_state.get(f"ic_conf_ok_{ciclo_ativo.get('num_ciclo','') if ciclo_ativo else ''}", False)
     b4 = _card(c4,4,"Conferência",    "Divergências e justificativas",
-               ativo=(etapa_nav==4), concluido=False, chave="ic_n4")
+               ativo=(etapa_nav==4), concluido=_conf_concluida, chave="ic_n4")
     b5 = _card(c5,5,"Upload ERP",     "Importa relatório Protheus",
                ativo=(etapa_nav==5), concluido=(erp_upload is not None), chave="ic_n5")
     b6 = _card(c6,6,"Fechar",         "Relatório final e fechamento",
@@ -980,6 +981,9 @@ def render(df_jlle, df_outras, formatar_br):
 
             # Carrega justificativas já salvas
             justs_salvas = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf)
+            # Se já há justificativas salvas, marca conferência como concluída
+            if justs_salvas:
+                st.session_state[f"ic_conf_ok_{num_ciclo_conf}"] = True
 
             cols_exib = [c for c in ["Produto","Descrição","Saldo ERP (Total)","Invent WMS",
                                       "Diferença Invent","Vl Total Diferença"] if c in df_div.columns]
@@ -1018,7 +1022,9 @@ def render(df_jlle, df_outras, formatar_br):
 
             if st.button("💾 Salvar justificativas", type="primary", key="btn_salvar_just"):
                 db_salvar_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf, justs_edit)
+                st.session_state[f"ic_conf_ok_{num_ciclo_conf}"] = True
                 st.success("✅ Justificativas salvas!")
+                st.rerun()
 
     # ── ETAPA 5 — UPLOAD ERP PROTHEUS ─────────────────────────────────────
     elif etapa_nav == 5:
@@ -1288,9 +1294,11 @@ def render(df_jlle, df_outras, formatar_br):
                                            data=data_iso, num_ciclo=ciclo_ativo.get("num_ciclo",""))
                         db_fechar_ciclo_ativo(engine_db, empresa_sel, filial_sel)
                         st.session_state["ic_fechado_msg"]  = True
-                        st.session_state["ic_etapa_nav"]    = 1
+                        st.session_state["ic_etapa_nav"]    = 7
                         st.session_state["ic_force_reload"] = True
-                        st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
+                        # Limpa TODO o cache do inventário para forçar releitura
+                        for _k in [k for k in st.session_state if k.startswith("ic_cache_") or k.startswith("_pdf5_")]:
+                            del st.session_state[_k]
                         st.rerun()
             else:
                 col_bt, col_ms = st.columns([1,3])
