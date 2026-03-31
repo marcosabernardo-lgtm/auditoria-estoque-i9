@@ -818,7 +818,7 @@ def render(df_jlle, df_outras, formatar_br):
                     ciclo_check = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
                     st.write("DEBUG — uploads após UPDATE:", ciclo_check.get("uploads") if ciclo_check else "None")
                     st.success(f"Etapa adicionada! {len(novos_desta_etapa)} novos produtos contados.")
-                    st.rerun()
+                    # st.rerun()  # TEMPORARIAMENTE DESABILITADO PARA DEBUG
                 except Exception as _err:
                     st.error(f"ERRO ao adicionar etapa: {_err}")
 
