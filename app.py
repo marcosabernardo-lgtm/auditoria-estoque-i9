@@ -60,7 +60,12 @@ def estilizar_tabela(df):
     return styled
 
 def get_engine():
-    try: return create_engine(st.secrets["connections"]["postgresql"]["url"])
+    try:
+        from sqlalchemy.pool import NullPool
+        return create_engine(
+            st.secrets["connections"]["postgresql"]["url"],
+            poolclass=NullPool,  # Sem pool — cada operação usa conexão direta
+        )
     except: return None
 
 def carregar_do_banco(tabela):
