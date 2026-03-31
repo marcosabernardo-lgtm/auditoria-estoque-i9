@@ -171,40 +171,41 @@ def render(df_jlle, df_outras, formatar_br):
     if df_jlle is None or df_jlle.empty:
         st.warning("Nenhum dado encontrado. Carregue os dados na sidebar."); return
 
-    col_e, col_f = st.columns(2)
-    with col_e:
-        empresa_sel = st.selectbox("🏢 Empresa",
-            sorted(df_jlle["Empresa"].dropna().unique()), key="ic_emp")
-    with col_f:
-        filial_sel = st.selectbox("📍 Filial",
-            sorted(df_jlle[df_jlle["Empresa"]==empresa_sel]["Filial"].dropna().unique()), key="ic_fil")
+    # Empresa/Filial vivem no session_state — só definidos após "Gerar lista"
+    empresa_sel = st.session_state.get("ic_empresa_sel")
+    filial_sel  = st.session_state.get("ic_filial_sel")
 
-    label     = f"{empresa_sel} — {filial_sel}"
-    df_filial = df_jlle[(df_jlle["Empresa"]==empresa_sel)&(df_jlle["Filial"]==filial_sel)].copy()
-    if df_filial.empty:
-        st.warning(f"Sem dados para **{label}**."); return
+    engine_db = st.session_state.get("_engine")
 
-    engine_db   = st.session_state.get("_engine")
-    # Cache leve de 5s para evitar releituras repetidas do banco
-    _cache_key = f"ic_cache_{empresa_sel}_{filial_sel}"
-    if st.session_state.get(f"{_cache_key}_ts", 0) < __import__('time').time() - 5 or        st.session_state.get("ic_force_reload", False):
-        st.session_state[f"{_cache_key}_contados"]    = db_obter_contados(engine_db, empresa_sel, filial_sel)
-        st.session_state[f"{_cache_key}_ciclos"]      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
-        st.session_state[f"{_cache_key}_ciclo_ativo"] = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
-        st.session_state[f"{_cache_key}_ts"]          = __import__('time').time()
-        st.session_state.pop("ic_force_reload", None)
-
-    contados    = st.session_state.get(f"{_cache_key}_contados", {})
-    ciclos      = st.session_state.get(f"{_cache_key}_ciclos", [])
-    ciclo_ativo = st.session_state.get(f"{_cache_key}_ciclo_ativo")
+    # Cache leve de 5s — só carrega se empresa/filial já foram selecionados
+    if empresa_sel and filial_sel:
+        _cache_key = f"ic_cache_{empresa_sel}_{filial_sel}"
+        if st.session_state.get(f"{_cache_key}_ts", 0) < __import__('time').time() - 5 or \
+                st.session_state.get("ic_force_reload", False):
+            st.session_state[f"{_cache_key}_contados"]    = db_obter_contados(engine_db, empresa_sel, filial_sel)
+            st.session_state[f"{_cache_key}_ciclos"]      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
+            st.session_state[f"{_cache_key}_ciclo_ativo"] = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+            st.session_state[f"{_cache_key}_ts"]          = __import__('time').time()
+            st.session_state.pop("ic_force_reload", None)
+        contados    = st.session_state.get(f"{_cache_key}_contados", {})
+        ciclos      = st.session_state.get(f"{_cache_key}_ciclos", [])
+        ciclo_ativo = st.session_state.get(f"{_cache_key}_ciclo_ativo")
+        label       = f"{empresa_sel} — {filial_sel}"
+        df_filial   = df_jlle[(df_jlle["Empresa"]==empresa_sel)&(df_jlle["Filial"]==filial_sel)].copy()
+    else:
+        contados = {}; ciclos = []; ciclo_ativo = None
+        label = ""; df_filial = pd.DataFrame()
 
     if st.session_state.pop("ic_fechado_msg", False):
         st.success("✅ Inventário fechado e registrado no histórico KPMG!")
 
-    df_score   = calcular_score(df_filial, tuple(sorted(contados.items())))
-    total_skus = len(df_score)
-    total_cont = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
-    pct_cob    = (total_cont/total_skus*100) if total_skus>0 else 0
+    if not df_filial.empty:
+        df_score   = calcular_score(df_filial, tuple(sorted(contados.items())))
+        total_skus = len(df_score)
+        total_cont = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
+        pct_cob    = (total_cont/total_skus*100) if total_skus>0 else 0
+    else:
+        df_score = pd.DataFrame(); total_skus = 0; total_cont = 0; pct_cob = 0.0
 
     _uploads = ciclo_ativo.get("uploads", []) if ciclo_ativo else []
     ja_cont_ciclo = set()
@@ -238,9 +239,49 @@ def render(df_jlle, df_outras, formatar_br):
     # ── ETAPA 1 ───────────────────────────────────────────────────────────
     if etapa_nav == 1:
         st.markdown("### 1. Gerar lista do ciclo")
+
+        # ── Filtros internos ──────────────────────────────────────────────
+        col_e, col_f, col_btn = st.columns([2, 2, 1])
+        with col_e:
+            empresas_disp = sorted(df_jlle["Empresa"].dropna().unique())
+            emp_idx = empresas_disp.index(empresa_sel) if empresa_sel in empresas_disp else None
+            emp_novo = st.selectbox("🏢 Empresa", [""] + empresas_disp,
+                                    index=0 if emp_idx is None else emp_idx + 1,
+                                    key="ic_emp_input")
+        with col_f:
+            if emp_novo:
+                filiais_disp = sorted(df_jlle[df_jlle["Empresa"]==emp_novo]["Filial"].dropna().unique())
+                fil_idx = filiais_disp.index(filial_sel) if filial_sel in filiais_disp else None
+                fil_novo = st.selectbox("📍 Filial", [""] + filiais_disp,
+                                        index=0 if fil_idx is None else fil_idx + 1,
+                                        key="ic_fil_input")
+            else:
+                st.selectbox("📍 Filial", [""], key="ic_fil_input", disabled=True)
+                fil_novo = ""
+        with col_btn:
+            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+            btn_gerar = st.button("🔍 Gerar lista", type="primary", use_container_width=True, key="ic_btn_gerar")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        if btn_gerar:
+            if not emp_novo or not fil_novo:
+                st.warning("⚠️ Selecione Empresa e Filial antes de gerar a lista.")
+                st.stop()
+            st.session_state["ic_empresa_sel"] = emp_novo
+            st.session_state["ic_filial_sel"]  = fil_novo
+            # Invalida cache para forçar releitura
+            _ck = f"ic_cache_{emp_novo}_{fil_novo}"
+            st.session_state.pop(f"{_ck}_ts", None)
+            st.rerun()
+
+        # Só mostra métricas e lista se empresa/filial já estiverem selecionadas
+        if not empresa_sel or not filial_sel or df_filial.empty:
+            st.info("👆 Selecione a Empresa e a Filial acima e clique em **Gerar lista** para começar.")
+            return
+
         data_aud = st.session_state.get("_data_auditoria")
         col_a,col_b = st.columns([3,2])
-        col_a.caption(f"📅 Dados carregados em: **{data_aud or 'esta sessão'}**")
+        col_a.caption(f"📅 Dados carregados em: **{data_aud or 'esta sessão'}**  |  🏢 **{label}**")
         col_b.caption("⚠️ Itens divergentes reaparecem mesmo após contados.")
 
         c1m,c2m,c3m,c4m = st.columns(4)
@@ -318,6 +359,8 @@ def render(df_jlle, df_outras, formatar_br):
 
     # ── ETAPA 2 ───────────────────────────────────────────────────────────
     elif etapa_nav == 2:
+        if not empresa_sel or not filial_sel:
+            st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 2. Upload do resultado WMS")
         st.caption("Faça o upload do Excel gerado pelo WMS após a contagem.")
         if not ciclo_ativo:
@@ -369,6 +412,8 @@ def render(df_jlle, df_outras, formatar_br):
 
     # ── ETAPA 3 ───────────────────────────────────────────────────────────
     elif etapa_nav == 3:
+        if not empresa_sel or not filial_sel:
+            st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 3. Adicionar etapa ao ciclo")
         if not ciclo_ativo:
             st.warning("⚠️ Nenhum ciclo ativo. Vá para **Gerar lista** primeiro."); return
@@ -422,6 +467,8 @@ def render(df_jlle, df_outras, formatar_br):
 
     # ── ETAPA 4 ───────────────────────────────────────────────────────────
     elif etapa_nav == 4:
+        if not empresa_sel or not filial_sel:
+            st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 4. Fechar inventário")
 
         if ciclo_ativo:
