@@ -1414,13 +1414,6 @@ def render(df_jlle, df_outras, formatar_br):
             df_c  = dfs_rel_todos.get(num_c, pd.DataFrame())
             n_sku = len(df_c) if not df_c.empty else c.get("qtd_contados", len(c.get("produtos_contados",[])))
 
-            # Pré-gera o PDF na primeira vez que a etapa é carregada
-            # (evita depender de rerun para mostrar o download_button)
-            _pdf_key = f"_pdf5_bytes_{num_c}"
-            if _pdf_key not in st.session_state:
-                pdf_b = gerar_pdf_kpmg_consolidado([c], dfs_rel_todos, empresa_sel, filial_sel)
-                st.session_state[_pdf_key] = pdf_b  # None se ReportLab indisponível
-
             ck, cc, cd, cr, ca, cs, ccob, cst, cpdf = st.columns(
                 [0.5, 2.5, 1.5, 2.5, 1.2, 1, 1.2, 1.2, 1.5])
             checked = ck.checkbox("", key=f"ck5_{num_c}", label_visibility="collapsed")
@@ -1432,18 +1425,24 @@ def render(df_jlle, df_outras, formatar_br):
             ccob.caption(f"{c.get('cobertura_pct',0):.1f}%")
             cst.caption(c.get("status","—"))
 
-            # Download direto — sem botão intermediário
-            pdf_pronto = st.session_state.get(_pdf_key)
-            if pdf_pronto:
-                cpdf.download_button(
-                    "📄",
-                    data=pdf_pronto,
-                    file_name=f"kpmg_{num_c}.pdf",
-                    mime="application/pdf",
-                    key=f"dl5_{num_c}",
-                    help=f"Baixar PDF — {num_c}")
-            elif pdf_pronto is None:
-                cpdf.caption("⚠️ sem dados")
+            # Gera PDF agora — sem cache, sem pré-geração
+            if not df_c.empty:
+                try:
+                    pdf_b = gerar_pdf_kpmg_consolidado([c], {num_c: df_c}, empresa_sel, filial_sel)
+                    if pdf_b:
+                        cpdf.download_button(
+                            "📄",
+                            data=pdf_b,
+                            file_name=f"kpmg_{num_c}.pdf",
+                            mime="application/pdf",
+                            key=f"dl5_{num_c}",
+                            help=f"Baixar PDF — {num_c}")
+                    else:
+                        cpdf.caption("⚠️ erro PDF")
+                except Exception as _epdf:
+                    cpdf.caption(f"⚠️ {str(_epdf)[:20]}")
+            else:
+                cpdf.caption("sem dados")
 
             if checked:
                 sel_ciclos.append(c)
@@ -1452,7 +1451,24 @@ def render(df_jlle, df_outras, formatar_br):
         st.markdown("---")
         if len(sel_ciclos) >= 2:
             st.info(f"**{len(sel_ciclos)} ciclos selecionados** — o PDF será consolidado.")
-            pdf_b = gerar_pdf_kpmg_consolidado(sel_ciclos, dfs_rel_todos, empresa_sel, filial_sel)
+            dfs_sel = {c.get("num_ciclo",""): dfs_rel_todos.get(c.get("num_ciclo",""), pd.DataFrame()) for c in sel_ciclos}
+            try:
+                pdf_b = gerar_pdf_kpmg_consolidado(sel_ciclos, dfs_sel, empresa_sel, filial_sel)
+                if pdf_b:
+                    nomes = "_".join(c.get("num_ciclo","") for c in sel_ciclos[:2])
+                    st.download_button(
+                        "📄 Baixar PDF Consolidado",
+                        data=pdf_b,
+                        file_name=f"kpmg_consolidado_{nomes}.pdf",
+                        mime="application/pdf",
+                        key="dl5_consol",
+                        type="primary")
+                else:
+                    st.error("⚠️ Erro ao gerar PDF consolidado.")
+            except Exception as _econs:
+                st.error(f"Erro: {_econs}")
+        elif len(sel_ciclos) == 1:
+            st.info("1 ciclo selecionado — selecione mais para consolidar.")
             if pdf_b:
                 nomes = "_".join(c.get("num_ciclo","") for c in sel_ciclos[:2])
                 st.download_button(
