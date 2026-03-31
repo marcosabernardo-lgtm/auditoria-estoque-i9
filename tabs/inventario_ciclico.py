@@ -252,7 +252,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         base.update(kw)
         return ParagraphStyle(name, **base)
 
-    s_capa_title = sty("ct", fontSize=22, textColor=C_TEAL,   fontName="Helvetica-Bold", spaceAfter=6)
+    s_capa_title = sty("ct", fontSize=22, textColor=C_TEAL,   fontName="Helvetica-Bold", spaceAfter=16, spaceBefore=8)
     s_capa_sub   = sty("cs", fontSize=14, textColor=C_ORANGE, fontName="Helvetica-Bold", spaceAfter=4)
     s_capa_meta  = sty("cm", fontSize=9,  textColor=colors.HexColor("#555555"), spaceAfter=3)
     s_sec        = sty("sec", fontSize=12, textColor=C_TEAL, fontName="Helvetica-Bold", spaceBefore=12, spaceAfter=4)
@@ -296,6 +296,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     elems.append(Paragraph("Gestão Integrada I9", sty("gi", fontSize=11, textColor=C_ORANGE, fontName="Helvetica-Bold")))
     elems.append(Spacer(1, 0.3*cm))
     elems.append(Paragraph("Relatório de Inventário Cíclico", s_capa_title))
+    elems.append(Spacer(1, 0.1*cm))
     elems.append(HRFlowable(width="100%", thickness=2, color=C_ORANGE))
     elems.append(Spacer(1, 0.5*cm))
     elems.append(Paragraph(f"Unidade: {label_unidade}", s_capa_sub))
