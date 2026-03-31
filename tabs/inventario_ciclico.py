@@ -1130,37 +1130,43 @@ def render(df_jlle, df_outras, formatar_br):
             else:
                 st.success(f"✅ ERP carregado — {len(df_erp_fech)} produtos · Documento: **{erp_fech.get('documento','—')}**")
 
-            # Monta relatório final: ERP como base + WMS
+            # Monta relatório final: direto do ERP Protheus (fonte da verdade)
             if not df_erp_fech.empty:
                 df_fech = df_erp_fech.copy()
+
                 # Garante colunas numéricas
                 for col in ["Qtd WMS","Qtd ERP","Divergencia Qtd","Divergencia Vl"]:
                     if col in df_fech.columns:
                         df_fech[col] = pd.to_numeric(df_fech[col], errors="coerce").fillna(0)
 
-                # Cruza com ERP para pegar Vl Unit e calcular valores
+                # Vl Unit do ERP interno para calcular Vl WMS e Vl ERP
+                # Usa Divergencia Vl do Protheus como base: Vl Unit = Vl Div / Qtd Div (quando possível)
                 vl_map = {}
                 if not df_filial.empty and "Produto" in df_filial.columns and "Vl Unit" in df_filial.columns:
                     _vl = df_filial[["Produto","Vl Unit"]].copy()
                     _vl["Produto"] = _vl["Produto"].astype(str).str.zfill(6)
                     vl_map = _vl.drop_duplicates("Produto").set_index("Produto")["Vl Unit"].to_dict()
 
-                df_fech["Vl Unit"]   = df_fech["Codigo"].map(lambda p: vl_map.get(str(p).zfill(6), 0))
-                df_fech["Vl WMS"]    = df_fech["Qtd WMS"]         * df_fech["Vl Unit"]
-                df_fech["Vl ERP"]    = df_fech["Qtd ERP"]         * df_fech["Vl Unit"]
+                df_fech["Codigo_6z"] = df_fech["Codigo"].astype(str).str.zfill(6)
+                df_fech["Vl Unit"]   = df_fech["Codigo_6z"].map(lambda p: vl_map.get(p, 0))
+                df_fech["Vl WMS"]    = df_fech["Qtd WMS"] * df_fech["Vl Unit"]
+                df_fech["Vl ERP"]    = df_fech["Qtd ERP"] * df_fech["Vl Unit"]
+                # Vl Divergência vem direto do Protheus (mais preciso)
+                if "Divergencia Vl" not in df_fech.columns:
+                    df_fech["Divergencia Vl"] = df_fech["Divergencia Qtd"] * df_fech["Vl Unit"]
 
-                # Monta tabela no formato pedido
+                # Tabela final — TODOS os itens do ERP (não só divergentes)
                 cols_rel = [c for c in ["Codigo","Descricao","Documento",
-                                         "Qtd WMS","Vl WMS","Qtd ERP","Vl ERP",
-                                         "Divergencia Qtd","Divergencia Vl"] if c in df_fech.columns]
+                                        "Qtd WMS","Vl WMS","Qtd ERP","Vl ERP",
+                                        "Divergencia Qtd","Divergencia Vl"] if c in df_fech.columns]
                 df_rel_fech = df_fech[cols_rel].rename(columns={
-                    "Codigo":        "Código",
-                    "Descricao":     "Descrição",
-                    "Documento":     "Documento",
-                    "Qtd WMS":       "Qtd WMS",
-                    "Vl WMS":        "Vl WMS",
-                    "Qtd ERP":       "Qtd ERP",
-                    "Vl ERP":        "Vl ERP",
+                    "Codigo":         "Código",
+                    "Descricao":      "Descrição",
+                    "Documento":      "Documento",
+                    "Qtd WMS":        "Qtd WMS",
+                    "Vl WMS":         "Vl WMS",
+                    "Qtd ERP":        "Qtd ERP",
+                    "Vl ERP":         "Vl ERP",
                     "Divergencia Qtd":"Divergência",
                     "Divergencia Vl": "Vl Divergência",
                 })
@@ -1178,19 +1184,19 @@ def render(df_jlle, df_outras, formatar_br):
                     df_rel_fech.style
                     .applymap(_style_fech, subset=[c for c in ["Divergência","Vl Divergência"] if c in df_rel_fech.columns])
                     .format({
-                        "Qtd WMS":       "{:,.2f}",
-                        "Vl WMS":        "R$ {:,.2f}",
-                        "Qtd ERP":       "{:,.2f}",
-                        "Vl ERP":        "R$ {:,.2f}",
-                        "Divergência":   "{:,.2f}",
-                        "Vl Divergência":"R$ {:,.2f}",
+                        "Qtd WMS":        "{:,.2f}",
+                        "Vl WMS":         "R$ {:,.2f}",
+                        "Qtd ERP":        "{:,.2f}",
+                        "Vl ERP":         "R$ {:,.2f}",
+                        "Divergência":    "{:,.2f}",
+                        "Vl Divergência": "R$ {:,.2f}",
                     }, na_rep="—"),
                     use_container_width=True, hide_index=True)
 
                 # KPIs de resumo
                 c1f,c2f,c3f,c4f = st.columns(4)
                 c1f.metric("Total produtos", len(df_rel_fech))
-                n_div_f = int((df_rel_fech["Divergência"] != 0).sum()) if "Divergência" in df_rel_fech.columns else 0
+                n_div_f  = int((df_rel_fech["Divergência"] != 0).sum()) if "Divergência" in df_rel_fech.columns else 0
                 c2f.metric("Divergentes", n_div_f)
                 vl_div_f = df_rel_fech["Vl Divergência"].sum() if "Vl Divergência" in df_rel_fech.columns else 0
                 c3f.metric("Vl Total Divergência", f"R$ {vl_div_f:,.2f}")
