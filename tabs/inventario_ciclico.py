@@ -139,6 +139,199 @@ def gerar_xlsx_historico(ciclos, label):
     out.seek(0); return out.getvalue()
 
 
+def montar_df_relatorio(uploads, df_filial):
+    """Cruza todos os uploads do ciclo com o ERP e retorna o df do relatório."""
+    if not uploads or df_filial is None or df_filial.empty:
+        return pd.DataFrame()
+
+    # Base ERP: saldo por produto (já deduplicado)
+    erp_cols = [c for c in ["Produto","Descrição","Saldo ERP (Total)","Vl Unit","Vl Total ERP"] if c in df_filial.columns]
+    df_erp = df_filial[erp_cols].copy()
+    for col in ["Saldo ERP (Total)","Vl Unit","Vl Total ERP"]:
+        if col in df_erp.columns:
+            df_erp[col] = pd.to_numeric(df_erp[col], errors="coerce").fillna(0)
+    df_erp["Produto"] = df_erp["Produto"].astype(str).str.zfill(6)
+    df_erp = df_erp.groupby("Produto", as_index=False).agg(
+        Descrição=("Descrição","first") if "Descrição" in df_erp.columns else ("Produto","first"),
+        **{"Saldo ERP (Total)": ("Saldo ERP (Total)","sum")} if "Saldo ERP (Total)" in df_erp.columns else {},
+        **{"Vl Unit": ("Vl Unit","first")} if "Vl Unit" in df_erp.columns else {},
+        **{"Vl Total ERP": ("Vl Total ERP","sum")} if "Vl Total ERP" in df_erp.columns else {},
+    )
+
+    # Consolida todos os uploads: pega a última contagem por produto
+    rows = []
+    for u in uploads:
+        df_u = u.get("df_rows")
+        if df_u:
+            for r in df_u:
+                rows.append(r)
+    if not rows:
+        return pd.DataFrame()
+
+    df_wms_all = pd.DataFrame(rows)
+    df_wms_all["Codigo"] = df_wms_all["Codigo"].astype(str).str.zfill(6)
+    for col in ["Qtd Antes","Qtd Depois","Qtd Diferença"]:
+        if col in df_wms_all.columns:
+            df_wms_all[col] = pd.to_numeric(df_wms_all[col], errors="coerce").fillna(0)
+    # Última ocorrência por produto
+    df_wms_ult = df_wms_all.drop_duplicates(subset=["Codigo"], keep="last")
+
+    # Join ERP × WMS
+    df_rel = df_erp.merge(
+        df_wms_ult[["Codigo","Qtd Antes","Qtd Depois","Acuracidade"]].rename(columns={"Codigo":"Produto"}),
+        on="Produto", how="left"
+    )
+    df_rel["Qtd Antes"]    = df_rel["Qtd Antes"].fillna(0)
+    df_rel["Qtd Depois"]   = df_rel["Qtd Depois"].fillna(0)
+    df_rel["Acuracidade"]  = df_rel["Acuracidade"].fillna("—")
+
+    saldo_erp = df_rel.get("Saldo ERP (Total)", pd.Series(0, index=df_rel.index)).fillna(0) \
+                if "Saldo ERP (Total)" in df_rel.columns else pd.Series(0, index=df_rel.index)
+    vl_unit   = df_rel.get("Vl Unit", pd.Series(0, index=df_rel.index)).fillna(0) \
+                if "Vl Unit" in df_rel.columns else pd.Series(0, index=df_rel.index)
+
+    df_rel["Saldo WMS"]          = df_rel["Qtd Antes"]
+    df_rel["Invent WMS"]         = df_rel["Qtd Depois"]
+    df_rel["Diferença Invent"]   = saldo_erp - df_rel["Invent WMS"]
+    df_rel["Vl Total ERP"]       = df_rel.get("Vl Total ERP", saldo_erp * vl_unit)
+    df_rel["Vl Total Diferença"] = df_rel["Diferença Invent"] * vl_unit
+
+    cols_saida = [c for c in [
+        "Produto","Descrição",
+        "Saldo ERP (Total)","Saldo WMS","Invent WMS",
+        "Diferença Invent","Acuracidade",
+        "Vl Total ERP","Vl Total Diferença"
+    ] if c in df_rel.columns]
+    return df_rel[cols_saida].sort_values("Vl Total ERP", ascending=False).reset_index(drop=True)
+
+
+def gerar_pdf_kpmg(ciclo, df_rel, empresa, filial):
+    """Gera PDF do relatório KPMG com ReportLab."""
+    try:
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    except ImportError:
+        return None
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                            leftMargin=1.2*cm, rightMargin=1.2*cm,
+                            topMargin=1.5*cm, bottomMargin=1.5*cm)
+    styles = getSampleStyleSheet()
+    C_TEAL   = colors.HexColor("#005562")
+    C_ORANGE = colors.HexColor("#EC6E21")
+    C_LIGHT  = colors.HexColor("#E8F5F9")
+    C_WHITE  = colors.white
+    C_GRAY   = colors.HexColor("#CCCCCC")
+    C_RED    = colors.HexColor("#C0392B")
+    C_GREEN  = colors.HexColor("#27AE60")
+
+    s_title  = ParagraphStyle("title",  fontSize=16, textColor=C_TEAL,   spaceAfter=4,  fontName="Helvetica-Bold")
+    s_sub    = ParagraphStyle("sub",    fontSize=10, textColor=C_ORANGE,  spaceAfter=2,  fontName="Helvetica-Bold")
+    s_meta   = ParagraphStyle("meta",   fontSize=8,  textColor=colors.gray, spaceAfter=8, fontName="Helvetica")
+    s_cell   = ParagraphStyle("cell",   fontSize=7,  textColor=colors.black, fontName="Helvetica", leading=9)
+    s_cellh  = ParagraphStyle("cellh",  fontSize=7,  textColor=C_WHITE,   fontName="Helvetica-Bold", leading=9, alignment=TA_CENTER)
+    s_num    = ParagraphStyle("num",    fontSize=7,  textColor=colors.black, fontName="Helvetica", alignment=TA_RIGHT, leading=9)
+
+    elems = []
+
+    # Cabeçalho
+    elems.append(Paragraph("Relatório de Inventário Cíclico — KPMG", s_title))
+    elems.append(Paragraph(f"{empresa} · {filial}", s_sub))
+    meta_txt = (f"Ciclo: {ciclo.get('num_ciclo','—')}   |   "
+                f"Gerado em: {ciclo.get('data_geracao','—')}   |   "
+                f"Contagem: {ciclo.get('data','—')}   |   "
+                f"Responsável: {ciclo.get('responsavel','—')}   |   "
+                f"Acuracidade Geral: {ciclo.get('acuracidade','—')}   |   "
+                f"Cobertura: {ciclo.get('cobertura_pct',0):.1f}%")
+    elems.append(Paragraph(meta_txt, s_meta))
+    elems.append(HRFlowable(width="100%", thickness=1.5, color=C_ORANGE))
+    elems.append(Spacer(1, 0.3*cm))
+
+    # KPIs
+    if not df_rel.empty:
+        total_erp   = df_rel["Saldo ERP (Total)"].sum() if "Saldo ERP (Total)" in df_rel.columns else 0
+        total_inv   = df_rel["Invent WMS"].sum()        if "Invent WMS"         in df_rel.columns else 0
+        total_dif   = df_rel["Diferença Invent"].sum()  if "Diferença Invent"   in df_rel.columns else 0
+        total_vlerp = df_rel["Vl Total ERP"].sum()      if "Vl Total ERP"       in df_rel.columns else 0
+        total_vldif = df_rel["Vl Total Diferença"].sum()if "Vl Total Diferença" in df_rel.columns else 0
+        n_div       = int((df_rel["Diferença Invent"]!=0).sum()) if "Diferença Invent" in df_rel.columns else 0
+
+        kpi_data = [
+            [Paragraph("SKUs Contados", s_cellh), Paragraph("Divergentes", s_cellh),
+             Paragraph("Saldo ERP Total", s_cellh), Paragraph("Invent WMS Total", s_cellh),
+             Paragraph("Vl Total ERP", s_cellh), Paragraph("Vl Total Diferença", s_cellh)],
+            [Paragraph(str(len(df_rel)), s_cell), Paragraph(str(n_div), s_cell),
+             Paragraph(f"{total_erp:,.0f}", s_num), Paragraph(f"{total_inv:,.0f}", s_num),
+             Paragraph(f"R$ {total_vlerp:,.2f}", s_num), Paragraph(f"R$ {total_vldif:,.2f}", s_num)],
+        ]
+        kpi_t = Table(kpi_data, colWidths=[4*cm]*6)
+        kpi_t.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), C_TEAL),
+            ("BACKGROUND", (0,1), (-1,1), C_LIGHT),
+            ("BOX",        (0,0), (-1,-1), 0.5, C_GRAY),
+            ("INNERGRID",  (0,0), (-1,-1), 0.3, C_GRAY),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING",(0,0),(-1,-1), 4),
+        ]))
+        elems.append(kpi_t)
+        elems.append(Spacer(1, 0.4*cm))
+
+    # Tabela principal
+    if not df_rel.empty:
+        headers = ["Produto","Descrição","Saldo ERP","Saldo WMS","Invent WMS","Dif. Invent","Acuracidade","Vl Total ERP","Vl Total Dif."]
+        col_keys = ["Produto","Descrição","Saldo ERP (Total)","Saldo WMS","Invent WMS","Diferença Invent","Acuracidade","Vl Total ERP","Vl Total Diferença"]
+        col_w    = [1.8*cm, 6.5*cm, 2*cm, 2*cm, 2*cm, 2*cm, 2.2*cm, 3*cm, 3*cm]
+
+        header_row = [Paragraph(h, s_cellh) for h in headers]
+        data_rows  = [header_row]
+        for _, row in df_rel.iterrows():
+            r = []
+            for k in col_keys:
+                v = row.get(k, "—")
+                if k in ["Saldo ERP (Total)","Saldo WMS","Invent WMS","Diferença Invent"]:
+                    r.append(Paragraph(f"{float(v):,.2f}" if v != "—" else "—", s_num))
+                elif k in ["Vl Total ERP","Vl Total Diferença"]:
+                    r.append(Paragraph(f"R$ {float(v):,.2f}" if v != "—" else "—", s_num))
+                else:
+                    r.append(Paragraph(str(v)[:60], s_cell))
+            data_rows.append(r)
+
+        tbl = Table(data_rows, colWidths=col_w, repeatRows=1)
+        style = [
+            ("BACKGROUND",    (0,0), (-1,0),  C_TEAL),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [C_WHITE, C_LIGHT]),
+            ("BOX",           (0,0), (-1,-1), 0.5, C_GRAY),
+            ("INNERGRID",     (0,0), (-1,-1), 0.3, C_GRAY),
+            ("TOPPADDING",    (0,0), (-1,-1), 3),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+        ]
+        # Destaca divergências
+        for i, row in enumerate(df_rel.itertuples(), start=1):
+            dif = getattr(row, "Diferença_Invent", None) or row._asdict().get("Diferença Invent", 0)
+            if dif and float(dif) != 0:
+                style.append(("TEXTCOLOR", (5, i), (5, i), C_RED))
+                style.append(("TEXTCOLOR", (8, i), (8, i), C_RED if float(dif) > 0 else C_GREEN))
+        tbl.setStyle(TableStyle(style))
+        elems.append(tbl)
+
+    # Rodapé
+    elems.append(Spacer(1, 0.5*cm))
+    elems.append(HRFlowable(width="100%", thickness=0.5, color=C_GRAY))
+    elems.append(Paragraph(
+        f"Gerado em {date.today().strftime('%d/%m/%Y')} · Sistema I9 — Auditoria de Estoque · Regra KPMG",
+        ParagraphStyle("footer", fontSize=7, textColor=colors.gray, alignment=TA_CENTER)))
+
+    doc.build(elems)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _card(col, num, titulo, desc, ativo, concluido, chave):
     if concluido:
         brd="#27AE60"; bg="#E8F5E9"; ctxt="#27500A"; icon="✓"; badge="Concluído"; bbg="#27AE60"
@@ -397,14 +590,59 @@ def render(df_jlle, df_outras, formatar_br):
                 df_wms["Status"] = df_wms["Codigo"].apply(
                     lambda p: "✅ Novo" if p in novos else "🔁 Já contado" if p in ja_tnh
                               else "➕ Fora da lista" if p in fora else "—")
-                st.dataframe(df_wms[["Codigo","Descricao","Qtd Antes","Qtd Depois","Qtd Diferença","Acuracidade","Status"]],
-                             use_container_width=True, hide_index=True)
+
+                # ── Enriquece com ERP ──────────────────────────────────────
+                erp_lookup = {}
+                if not df_filial.empty and "Produto" in df_filial.columns:
+                    _erp = df_filial[["Produto"] +
+                        [c for c in ["Saldo ERP (Total)","Vl Unit","Vl Total ERP"] if c in df_filial.columns]
+                    ].copy()
+                    for col in ["Saldo ERP (Total)","Vl Unit","Vl Total ERP"]:
+                        if col in _erp.columns:
+                            _erp[col] = pd.to_numeric(_erp[col], errors="coerce").fillna(0)
+                    _erp["Produto"] = _erp["Produto"].astype(str).str.zfill(6)
+                    _erp = _erp.groupby("Produto", as_index=False).sum()
+                    erp_lookup = _erp.set_index("Produto").to_dict("index")
+
+                df_wms["Saldo ERP"]        = df_wms["Codigo"].map(lambda p: erp_lookup.get(p, {}).get("Saldo ERP (Total)", 0))
+                df_wms["Vl Unit"]          = df_wms["Codigo"].map(lambda p: erp_lookup.get(p, {}).get("Vl Unit", 0))
+                df_wms["Invent WMS"]       = pd.to_numeric(df_wms["Qtd Depois"], errors="coerce").fillna(0)
+                df_wms["Diferença Invent"] = df_wms["Saldo ERP"] - df_wms["Invent WMS"]
+                df_wms["Vl Total ERP"]     = df_wms["Saldo ERP"] * df_wms["Vl Unit"]
+                df_wms["Vl Total Dif."]    = df_wms["Diferença Invent"] * df_wms["Vl Unit"]
+
+                cols_exib = ["Codigo","Descricao","Saldo ERP","Qtd Antes","Invent WMS",
+                             "Diferença Invent","Acuracidade","Vl Total ERP","Vl Total Dif.","Status"]
+                cols_exib = [c for c in cols_exib if c in df_wms.columns]
+
+                def _style_dif(val):
+                    try:
+                        v = float(val)
+                        if v > 0:  return "color:#C0392B;font-weight:bold"
+                        if v < 0:  return "color:#27AE60;font-weight:bold"
+                    except: pass
+                    return ""
+
+                st.dataframe(
+                    df_wms[cols_exib].style
+                    .applymap(_style_dif, subset=["Diferença Invent","Vl Total Dif."])
+                    .format({
+                        "Saldo ERP":"{:,.2f}", "Qtd Antes":"{:,.2f}",
+                        "Invent WMS":"{:,.2f}", "Diferença Invent":"{:,.2f}",
+                        "Vl Total ERP":"R$ {:,.2f}", "Vl Total Dif.":"R$ {:,.2f}"
+                    }, na_rep="—"),
+                    use_container_width=True, hide_index=True)
+
+                # Salva linhas para o relatório PDF
+                df_rows_save = df_wms[["Codigo","Descricao","Qtd Antes","Qtd Depois","Acuracidade"]].copy()
+                df_rows_save.columns = ["Codigo","Descricao","Qtd Antes","Qtd Depois","Acuracidade"]
 
                 st.session_state["ic_upload_pendente"] = {
                     "num_inv":res.get("num_inv","—"),"data":res.get("data","—"),
                     "data_iso":res.get("data_iso",date.today().isoformat()),
                     "responsavel":res.get("responsavel","—"),"acuracidade":res.get("acuracidade","—"),
                     "produtos":list(pl_ciclo & prods_wms),
+                    "df_rows": df_rows_save.to_dict("records"),
                 }
                 st.info("✔ Arquivo carregado. Vá para **Adicionar etapa** para confirmar.")
             except Exception as e:
@@ -487,12 +725,16 @@ def render(df_jlle, df_outras, formatar_br):
                     for u in _uploads: todos.update(str(p).strip().zfill(6) for p in u.get("produtos",[]))
                     data_iso = _uploads[-1].get("data_iso",date.today().isoformat()) if _uploads else date.today().isoformat()
                     pct_f    = len(todos & pl_ciclo)/len(pl_ciclo)*100 if pl_ciclo else 0
+                    # Monta e serializa df_relatorio para guardar no ciclo
+                    df_rel   = montar_df_relatorio(_uploads, df_filial)
+                    rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
                     cf = {**ciclo_ativo,"uploads":len(_uploads),"produtos_contados":list(todos),
                           "cobertura_pct":pct_f,"status":"Concluído",
                           "num_inv":_uploads[-1].get("num_inv","—") if _uploads else "—",
                           "data":_uploads[-1].get("data","—") if _uploads else "—",
                           "responsavel":_uploads[-1].get("responsavel","—") if _uploads else "—",
-                          "acuracidade":_uploads[-1].get("acuracidade","—") if _uploads else "—"}
+                          "acuracidade":_uploads[-1].get("acuracidade","—") if _uploads else "—",
+                          "relatorio_json": rel_json}
                     db_gravar_ciclo(engine_db,empresa_sel,filial_sel,cf)
                     db_marcar_contados(engine_db,empresa_sel,filial_sel,list(todos),
                                        data=data_iso,num_ciclo=ciclo_ativo.get("num_ciclo",""))
@@ -520,6 +762,35 @@ def render(df_jlle, df_outras, formatar_br):
                     "SKUs Contados":c.get("qtd_contados",0),"Cobertura %":f"{c.get('cobertura_pct',0):.1f}%",
                     "Status":c.get("status","—")} for c in ciclos])
                 st.dataframe(df_h, use_container_width=True, hide_index=True)
+
+                # Botões PDF por ciclo
+                st.markdown("##### 📄 Relatório PDF por ciclo")
+                for c in ciclos:
+                    rel_json = c.get("relatorio_json", "[]")
+                    try:
+                        df_rel_c = pd.read_json(io.StringIO(rel_json), orient="records") if rel_json and rel_json != "[]" else pd.DataFrame()
+                    except Exception:
+                        df_rel_c = pd.DataFrame()
+                    num_c = c.get("num_ciclo","ciclo")
+                    col_pdf, col_info = st.columns([2, 3])
+                    with col_pdf:
+                        if not df_rel_c.empty:
+                            pdf_bytes = gerar_pdf_kpmg(c, df_rel_c, empresa_sel, filial_sel)
+                            if pdf_bytes:
+                                st.download_button(
+                                    f"📄 PDF — {num_c}",
+                                    data=pdf_bytes,
+                                    file_name=f"kpmg_{num_c}.pdf",
+                                    mime="application/pdf",
+                                    key=f"pdf_{num_c}")
+                            else:
+                                st.caption("⚠️ ReportLab não disponível")
+                        else:
+                            st.caption(f"Sem dados de relatório para {num_c}")
+                    with col_info:
+                        st.caption(f"{c.get('data','—')} · {c.get('responsavel','—')} · {c.get('acuracidade','—')} · Cobertura: {c.get('cobertura_pct',0):.1f}%")
+
+                st.markdown("---")
                 col_dl,col_rs = st.columns([3,1])
                 with col_dl:
                     st.download_button("📥 Exportar Histórico KPMG",
