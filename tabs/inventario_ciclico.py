@@ -1321,6 +1321,22 @@ def render(df_jlle, df_outras, formatar_br):
 
             dfs_rel_todos[num_c] = df_c
 
+        # DEBUG temporário — remover após resolver
+        with st.expander("🔍 Debug (remover após resolver)"):
+            for c in ciclos:
+                num_c = c.get("num_ciclo","")
+                df_c  = dfs_rel_todos.get(num_c, pd.DataFrame())
+                st.write(f"**{num_c}**")
+                st.write(f"- rel_json len: {len(c.get('relatorio_json','[]'))}")
+                st.write(f"- produtos_contados: {c.get('produtos_contados',[])}")
+                st.write(f"- df_c shape: {df_c.shape}")
+                st.write(f"- df_c colunas: {list(df_c.columns) if not df_c.empty else 'VAZIO'}")
+                if not df_c.empty:
+                    st.dataframe(df_c.head(3))
+                _pdf_key = f"_pdf5_bytes_{num_c}"
+                st.write(f"- pdf cache: {type(st.session_state.get(_pdf_key))}")
+                st.write(f"- df_filial shape: {df_filial.shape}")
+
         # Tabela com checkboxes inline
         sel_ciclos = []
         col_ck, col_ciclo, col_data, col_resp, col_acur, col_sku, col_cob, col_status, col_pdf = st.columns(
