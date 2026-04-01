@@ -1087,17 +1087,17 @@ def render(df_jlle, df_outras, formatar_br):
 
         col_nf1, col_nf2, col_nf3 = st.columns(3)
         with col_nf1:
-            num_nf_input = st.text_input("Nº da NF", key=f"nf_num_{num_ciclo_nf}", placeholder="000009983")
+            num_nf_input = st.text_input("Nº da NF", value="", key=f"nf_num_{num_ciclo_nf}_{len(nf_ajustes_ativo)}", placeholder="000009983")
         with col_nf2:
-            data_nf_input = st.text_input("Data da NF", key=f"nf_data_{num_ciclo_nf}", placeholder="28/01/2026")
+            data_nf_input = st.text_input("Data da NF", value="", key=f"nf_data_{num_ciclo_nf}_{len(nf_ajustes_ativo)}", placeholder="28/01/2026")
         with col_nf3:
-            nat_nf_input = st.text_input("Natureza", key=f"nf_nat_{num_ciclo_nf}", value="BAIXA PERDA")
+            nat_nf_input = st.text_input("Natureza", value="BAIXA PERDA", key=f"nf_nat_{num_ciclo_nf}_{len(nf_ajustes_ativo)}")
 
         st.markdown("##### Itens da NF")
         st.caption("Informe os produtos, quantidades e valores conforme a NF.")
 
         # Pré-popula com produtos que precisam de ajuste (lendo do banco agora)
-        _nf_key = f"nf_itens_{num_ciclo_nf}"
+        _nf_key = f"nf_itens_{num_ciclo_nf}_{len(nf_ajustes_ativo)}"
         if _nf_key not in st.session_state:
             itens_pre = []
             if erp_uploads_ativo and prods_ajuste:
