@@ -1055,10 +1055,12 @@ def render(df_jlle, df_outras, formatar_br):
         prods_ajuste = {p: j for p,j in justs_conf.items()
                         if j == "Ajuste de inventário" and not p.startswith("_")}
 
-        # Limpa cache de itens se não há NF salva (evita reutilizar dados de ciclos anteriores)
+        # Limpa cache quando não há NF salva (evita reutilizar dados de ciclos anteriores)
         _nf_key = f"nf_itens_{num_ciclo_nf}"
-        if not nf_ajustes_ativo and _nf_key in st.session_state:
-            del st.session_state[_nf_key]
+        if not nf_ajustes_ativo:
+            for _k in [_nf_key, f"nf_num_{num_ciclo_nf}", f"nf_data_{num_ciclo_nf}",
+                        f"nf_nat_{num_ciclo_nf}", "nf_num", "nf_data", "nf_nat", "nf_itens"]:
+                st.session_state.pop(_k, None)
 
         if prods_ajuste:
             st.info(f"**{len(prods_ajuste)} produto(s)** com 'Ajuste de inventário': {', '.join(prods_ajuste.keys())}")
