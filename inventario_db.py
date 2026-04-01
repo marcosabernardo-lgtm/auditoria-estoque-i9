@@ -366,3 +366,43 @@ def db_salvar_erp_upload(engine, empresa, filial, num_ciclo, documento, data_upl
             conn.commit()
     except Exception as ex:
         logger.warning("db_salvar_erp_upload: %s", ex)
+
+
+# ── NF de Ajuste ─────────────────────────────────────────────────────────────
+
+def db_obter_nf_ajustes(engine, empresa, filial, num_ciclo):
+    """Retorna lista de NFs de ajuste do ciclo."""
+    if engine is None: return []
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT num_nf, data_nf, natureza, dados_json
+                FROM inventario_nf_ajuste
+                WHERE empresa=:e AND filial=:f AND num_ciclo=:c
+                ORDER BY atualizado_em ASC
+            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchall()
+        return [{"num_nf": r[0], "data_nf": str(r[1]) if r[1] else "",
+                 "natureza": r[2], "dados": json.loads(r[3] or "[]")} for r in rows]
+    except Exception as ex:
+        logger.warning("db_obter_nf_ajustes: %s", ex)
+        return []
+
+
+def db_salvar_nf_ajuste(engine, empresa, filial, num_ciclo, num_nf, data_nf, natureza, dados):
+    """Salva NF de ajuste — upsert por num_nf."""
+    if engine is None: return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO inventario_nf_ajuste
+                    (empresa, filial, num_ciclo, num_nf, data_nf, natureza, dados_json, atualizado_em)
+                VALUES (:e,:f,:c,:nf,:data,:nat,:dados,NOW())
+                ON CONFLICT (empresa,filial,num_ciclo,num_nf)
+                DO UPDATE SET data_nf=EXCLUDED.data_nf, natureza=EXCLUDED.natureza,
+                              dados_json=EXCLUDED.dados_json, atualizado_em=NOW()
+            """), {"e":empresa,"f":filial,"c":num_ciclo,"nf":num_nf,
+                   "data":data_nf,"nat":natureza,
+                   "dados":json.dumps(dados, ensure_ascii=False)})
+            conn.commit()
+    except Exception as ex:
+        logger.warning("db_salvar_nf_ajuste: %s", ex)
