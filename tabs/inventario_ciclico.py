@@ -23,6 +23,54 @@ except ImportError:
     DB_DISPONIVEL = False
 
 
+def parsear_nf_danfe(arquivo_bytes):
+    """Extrai dados da NF-e DANFE (formato Alltech/TOTVS Protheus) via pdfplumber."""
+    import re, io as _io
+    result = {"num_nf":"","data":"","natureza":"","itens":[]}
+    try:
+        import pdfplumber
+        with pdfplumber.open(_io.BytesIO(arquivo_bytes)) as pdf:
+            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+    except Exception as e:
+        return result, str(e)
+
+    # Nº da NF
+    nums = re.findall(r'N\.\s*0*(\d+)', text)
+    if nums: result["num_nf"] = nums[0].zfill(9)
+
+    # Data de emissão
+    m = re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text)
+    if m:
+        result["data"] = m.group(1)
+    else:
+        m = re.search(r'(\d{2}/\d{2}/\d{4})\s+\d{2}:\d{2}:\d{2}', text)
+        if m: result["data"] = m.group(1)
+
+    # Natureza da operação
+    m = re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text)
+    if m:
+        result["natureza"] = m.group(1).strip()
+    else:
+        m = re.search(r'(BAIXA [A-Z]+|VENDA|TRANSFERENCIA|AJUSTE DE INVENTARIO)', text)
+        if m: result["natureza"] = m.group(1)
+
+    # Itens — padrão: CODPROD DESCRICAO NCM CST CFOP UN QUANT V.UNIT V.TOTAL
+    itens = []
+    padrao = re.compile(
+        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+([\d,]+)\s+([\d,]+(?:\d{3})?)\s+([\d,]+)',
+        re.MULTILINE)
+    for m in padrao.finditer(text):
+        itens.append({
+            "Codigo":   m.group(1),
+            "Descricao":m.group(2).strip(),
+            "Qtd":      float(m.group(3).replace(",",".")),
+            "Vl Unit":  float(m.group(4).replace(",",".")),
+            "Vl Total": float(m.group(5).replace(",",".")),
+        })
+    result["itens"] = itens
+    return result, None
+
+
 def processar_resultado_wms(arquivo):
     xls     = pd.ExcelFile(arquivo)
     df_meta = pd.read_excel(xls, sheet_name=xls.sheet_names[0], header=None, nrows=7)
@@ -1076,69 +1124,46 @@ def render(df_jlle, df_outras, formatar_br):
         st.markdown("---")
         st.markdown("##### Importar nova NF de ajuste")
 
-        # Upload do PDF (informativo — extrai número e data do nome do arquivo)
-        arq_pdf = st.file_uploader("📎 Selecione o PDF da NF (opcional — apenas para referência)",
-                                    type=["pdf"], key=f"nf_pdf_{num_ciclo_nf}_{len(nf_ajustes_ativo)}")
+        arq_pdf = st.file_uploader("📎 Selecione o PDF da NF (DANFE)",
+                                    type=["pdf"], key=f"nf_pdf_{num_ciclo_nf}_{_nf_idx}")
+
         if arq_pdf:
-            st.success(f"✅ PDF carregado: **{arq_pdf.name}** ({arq_pdf.size/1024:.1f} KB)")
+            pdf_bytes = arq_pdf.read()
+            nf_dados, nf_erro = parsear_nf_danfe(pdf_bytes)
 
-        col_nf1, col_nf2, col_nf3 = st.columns(3)
-        with col_nf1:
-            num_nf_input  = st.text_input("Nº da NF",   key=f"nf_num_{num_ciclo_nf}_{_nf_idx}",  placeholder="000009983")
-        with col_nf2:
-            data_nf_input = st.text_input("Data da NF", key=f"nf_data_{num_ciclo_nf}_{_nf_idx}", placeholder="28/01/2026")
-        with col_nf3:
-            nat_nf_input  = st.text_input("Natureza",   key=f"nf_nat_{num_ciclo_nf}_{_nf_idx}",  value="BAIXA PERDA")
-
-        st.markdown("##### Itens da NF")
-        st.caption("Informe os produtos, quantidades e valores conforme a NF.")
-
-        # Sempre recalcula os itens — nunca usa session_state
-        itens_pre = []
-        if erp_uploads_ativo and prods_ajuste:
-            df_erp_ref = pd.concat(
-                [pd.DataFrame(u["dados"]) for u in erp_uploads_ativo if u.get("dados")],
-                ignore_index=True)
-            if not df_erp_ref.empty and "Codigo" in df_erp_ref.columns:
-                df_erp_ref = df_erp_ref.drop_duplicates(subset=["Codigo"], keep="last")
-                for p in prods_ajuste:
-                    row_e = df_erp_ref[df_erp_ref["Codigo"].astype(str).str.zfill(6) == p]
-                    desc  = str(row_e["Descricao"].iloc[0]) if not row_e.empty and "Descricao" in row_e.columns else ""
-                    dq    = abs(float(row_e["Divergencia Qtd"].iloc[0])) if not row_e.empty and "Divergencia Qtd" in row_e.columns else 0.0
-                    dvl   = abs(float(row_e["Divergencia Vl"].iloc[0]))  if not row_e.empty and "Divergencia Vl"  in row_e.columns else 0.0
-                    vu    = dvl/dq if dq else 0.0
-                    itens_pre.append({"Codigo": p, "Descricao": desc, "Qtd": dq, "Vl Unit": vu, "Vl Total": dvl})
-        if not itens_pre:
-            itens_pre = [{"Codigo":"","Descricao":"","Qtd":0.0,"Vl Unit":0.0,"Vl Total":0.0}]
-
-        df_nf_edit_result = st.data_editor(
-            pd.DataFrame(itens_pre),
-            use_container_width=True,
-            num_rows="dynamic",
-            key=f"nf_editor_{num_ciclo_nf}_{len(nf_ajustes_ativo)}",
-            column_config={
-                "Codigo":   st.column_config.TextColumn("Código", width="small"),
-                "Descricao":st.column_config.TextColumn("Descrição", width="large"),
-                "Qtd":      st.column_config.NumberColumn("Qtd", format="%.4f"),
-                "Vl Unit":  st.column_config.NumberColumn("Vl Unit", format="R$ %.2f"),
-                "Vl Total": st.column_config.NumberColumn("Vl Total", format="R$ %.2f"),
-            })
-
-        if st.button("💾 Salvar NF de ajuste", type="primary", key="btn_salvar_nf"):
-            if not num_nf_input.strip():
-                st.error("Informe o número da NF.")
+            if nf_erro:
+                st.error(f"Erro ao ler PDF: {nf_erro}")
+            elif not nf_dados["itens"]:
+                st.warning("⚠️ Não foi possível extrair itens do PDF. Verifique se é um DANFE válido.")
             else:
-                try:
-                    data_nf_iso = _dt.strptime(data_nf_input.strip(), "%d/%m/%Y").date().isoformat() if data_nf_input.strip() else date.today().isoformat()
-                except:
-                    data_nf_iso = date.today().isoformat()
-                dados_nf = df_nf_edit_result.dropna(subset=["Codigo"]).to_dict("records")
-                db_salvar_nf_ajuste(engine_db, empresa_sel, filial_sel, num_ciclo_nf,
-                                     num_nf_input.strip(), data_nf_iso, nat_nf_input.strip(), dados_nf)
-                st.session_state["ic_force_reload"] = True
-                st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
-                st.success(f"✅ NF {num_nf_input} salva com {len(dados_nf)} item(ns)!")
-                st.rerun()
+                st.success(f"✅ NF **{nf_dados['num_nf']}** · {nf_dados['data']} · {nf_dados['natureza']} · **{len(nf_dados['itens'])} item(ns)**")
+
+                col_nf1, col_nf2, col_nf3 = st.columns(3)
+                col_nf1.markdown(f"**Nº NF:** {nf_dados['num_nf']}")
+                col_nf2.markdown(f"**Data:** {nf_dados['data']}")
+                col_nf3.markdown(f"**Natureza:** {nf_dados['natureza']}")
+
+                df_itens = pd.DataFrame(nf_dados["itens"])
+                st.dataframe(df_itens.style.format({
+                    "Qtd":     "{:,.4f}",
+                    "Vl Unit": "R$ {:,.2f}",
+                    "Vl Total":"R$ {:,.2f}",
+                }, na_rep="—"), use_container_width=True, hide_index=True)
+
+                if st.button("💾 Salvar NF de ajuste", type="primary", key=f"btn_salvar_nf_{_nf_idx}"):
+                    try:
+                        data_nf_iso = datetime.strptime(nf_dados["data"], "%d/%m/%Y").date().isoformat() if nf_dados["data"] else date.today().isoformat()
+                    except:
+                        data_nf_iso = date.today().isoformat()
+                    db_salvar_nf_ajuste(engine_db, empresa_sel, filial_sel, num_ciclo_nf,
+                                         nf_dados["num_nf"], data_nf_iso, nf_dados["natureza"],
+                                         nf_dados["itens"])
+                    st.session_state["ic_force_reload"] = True
+                    st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
+                    st.success(f"✅ NF {nf_dados['num_nf']} salva com {len(nf_dados['itens'])} item(ns)!")
+                    st.rerun()
+        else:
+            st.info("Faça o upload do PDF da NF para preencher os dados automaticamente.")
 
     # ── ETAPA 4 — CONFERÊNCIA (divergências + justificativas) ────────────
     elif etapa_nav == 4:
