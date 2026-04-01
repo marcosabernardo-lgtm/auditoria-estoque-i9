@@ -454,16 +454,23 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         elems.append(Spacer(1, 0.3*cm))
 
         # Metadados do ciclo em grid 3x2
+        # Calcula SKUs divergentes e acuracidade real a partir do df_rel
+        if not df_rel.empty and "Diferença Invent" in df_rel.columns:
+            n_diverg = int((pd.to_numeric(df_rel["Diferença Invent"], errors="coerce").fillna(0) != 0).sum())
+        else:
+            n_diverg = 0
+        acur_calc = f"{(n_sku - n_diverg) / n_sku * 100:.1f}%" if n_sku > 0 else "—"
+
         meta_data = [
             [Paragraph("Data da contagem", s_det_label), Paragraph(c.get("data","—"), s_det_val),
              Paragraph("Nº Inventário",    s_det_label), Paragraph(c.get("num_inv","—"), s_det_val),
              Paragraph("Status",           s_det_label), Paragraph(c.get("status","—"), s_det_val)],
             [Paragraph("Responsável",      s_det_label), Paragraph(c.get("responsavel","—"), s_det_val),
-             Paragraph("Acuracidade",      s_det_label), Paragraph(str(c.get("acuracidade","—")), s_det_val),
+             Paragraph("Acuracidade",      s_det_label), Paragraph(acur_calc, s_det_val),
              Paragraph("SKUs contados",    s_det_label), Paragraph(str(n_sku), s_det_val)],
             [Paragraph("SKUs na lista",    s_det_label), Paragraph(str(c.get("qtd_lista","—")), s_det_val),
              Paragraph("Cobertura",        s_det_label), Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_det_val),
-             Paragraph("", s_det_label), Paragraph("", s_det_val)],
+             Paragraph("SKUs divergentes", s_det_label), Paragraph(str(n_diverg), s_det_val)],
         ]
         tbl_meta = Table(meta_data, colWidths=[3*cm, 4.5*cm, 2.5*cm, 3*cm, 2.5*cm, 3*cm])
         tbl_meta.setStyle(TableStyle([
