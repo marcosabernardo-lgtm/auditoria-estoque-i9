@@ -665,30 +665,16 @@ def render(df_jlle, df_outras, formatar_br):
             st.info("👆 Volte à tela inicial e selecione a Empresa e a Filial para começar.")
             return
 
-        col_info, col_btn = st.columns([4, 1])
-        with col_info:
-            st.markdown(
-                f"""<div style="background:#004550;border-radius:8px;padding:10px 16px;margin-bottom:8px;">
-                  <span style="color:#aac8cc;font-size:0.85rem;">🏢 Empresa</span>
-                  <span style="color:#fff;font-weight:700;margin:0 16px;">{empresa_sel}</span>
-                  <span style="color:#aac8cc;font-size:0.85rem;">📍 Filial</span>
-                  <span style="color:#fff;font-weight:700;margin-left:8px;">{filial_sel}</span>
-                </div>""", unsafe_allow_html=True)
-        with col_btn:
-            st.markdown("<div style='margin-top:4px'>", unsafe_allow_html=True)
-            btn_gerar = st.button("🔍 Gerar lista", type="primary", use_container_width=True, key="ic_btn_gerar")
-            st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"""<div style="background:#004550;border-radius:8px;padding:10px 16px;margin-bottom:8px;">
+              <span style="color:#aac8cc;font-size:0.85rem;">🏢 Empresa</span>
+              <span style="color:#fff;font-weight:700;margin:0 16px;">{empresa_sel}</span>
+              <span style="color:#aac8cc;font-size:0.85rem;">📍 Filial</span>
+              <span style="color:#fff;font-weight:700;margin-left:8px;">{filial_sel}</span>
+            </div>""", unsafe_allow_html=True)
 
-        if btn_gerar:
-            st.session_state["ic_empresa_sel"] = empresa_sel
-            st.session_state["ic_filial_sel"]  = filial_sel
-            _ck = f"ic_cache_{empresa_sel}_{filial_sel}"
-            st.session_state.pop(_ck, None)
-            st.rerun()
-
-        # Só mostra métricas e lista se empresa/filial já estiverem selecionadas
         if df_filial.empty:
-            st.info("👆 Clique em **Gerar lista** para carregar os dados.")
+            st.info("👆 Selecione modo e clique em **Gerar lista** para carregar os dados.")
             return
 
         data_aud = st.session_state.get("_data_auditoria")
@@ -717,19 +703,27 @@ def render(df_jlle, df_outras, formatar_br):
         modo = st.radio("Modo", ["Quantidade fixa","Percentual"], horizontal=True, key="ic_modo")
         if modo == "Quantidade fixa":
             st.caption("📌 Conta um número fixo de produtos por ciclo.")
-            cols_b = st.columns(4)
+            cols_b = st.columns([1,1,1,1,2])
             if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 4
-            for cb,qtd in zip(cols_b,[4,30,50,80]):
+            for cb,qtd in zip(cols_b[:4],[4,30,50,80]):
                 with cb:
-                    if st.button(f"{qtd}",key=f"ic_q{qtd}",type="primary" if st.session_state.ic_qtd==qtd else "secondary"):
+                    if st.button(f"{qtd}",key=f"ic_q{qtd}",type="primary" if st.session_state.ic_qtd==qtd else "secondary",use_container_width=True):
                         st.session_state.ic_qtd=qtd
+            with cols_b[4]:
+                btn_gerar_lista = st.button("🔍 Gerar lista", type="primary", use_container_width=True, key="ic_btn_gerar_lista")
             qtd_ciclo = min(st.session_state.ic_qtd, total_skus)
         else:
             st.caption("📊 **5%** = 20 ciclos/ano · **10%** = 10 ciclos/ano · **20%** = 5 ciclos/ano")
-            pmap = {"5%":0.05,"10%":0.10,"20%":0.20,"30%":0.30}
-            pl   = st.select_slider("Faixa",list(pmap.keys()),value="10%",key="ic_pct")
-            qtd_ciclo = max(1,int(total_skus*pmap[pl]))
-            st.caption(f"→ {qtd_ciclo} itens de {total_skus}")
+            col_sl, col_gb = st.columns([3,1])
+            with col_sl:
+                pmap = {"5%":0.05,"10%":0.10,"20%":0.20,"30%":0.30}
+                pl   = st.select_slider("Faixa",list(pmap.keys()),value="10%",key="ic_pct")
+                qtd_ciclo = max(1,int(total_skus*pmap[pl]))
+                st.caption(f"→ {qtd_ciclo} itens de {total_skus}")
+            with col_gb:
+                st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+                btn_gerar_lista = st.button("🔍 Gerar lista", type="primary", use_container_width=True, key="ic_btn_gerar_lista")
+                st.markdown("</div>", unsafe_allow_html=True)
 
         # ── MODO TESTE: lista fixa com 3 produtos ──────────────────────────
         _PRODS_TESTE = ["003877", "009307", "003926"]
@@ -781,15 +775,20 @@ def render(df_jlle, df_outras, formatar_br):
         with col_info:
             st.info(f"Nº do ciclo: **{num_ciclo}**")
 
-        db_salvar_ciclo_ativo(engine_db, empresa_sel, filial_sel, {
-            "num_ciclo":      num_ciclo,
-            "data_geracao":   date.today().strftime("%d/%m/%Y"),
-            "label":          label,
-            "qtd_lista":      len(df_exib),
-            "produtos_lista": df_exib["Produto"].astype(str).tolist(),
-            "uploads":        _uploads,
-            "status":         "Em andamento",
-        })
+        if btn_gerar_lista:
+            db_salvar_ciclo_ativo(engine_db, empresa_sel, filial_sel, {
+                "num_ciclo":      num_ciclo,
+                "data_geracao":   date.today().strftime("%d/%m/%Y"),
+                "label":          label,
+                "qtd_lista":      len(df_exib),
+                "produtos_lista": df_exib["Produto"].astype(str).tolist(),
+                "uploads":        _uploads,
+                "status":         "Em andamento",
+            })
+            st.session_state["ic_force_reload"] = True
+            st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
+            st.success(f"✅ Lista gerada — {len(df_exib)} produtos. Ciclo: **{num_ciclo}**")
+            st.rerun()
 
     # ── ETAPA 2 — UPLOAD ERP (PROTHEUS) ──────────────────────────────────
     elif etapa_nav == 2:
@@ -998,70 +997,72 @@ def render(df_jlle, df_outras, formatar_br):
                 "Outros",
             ]
 
-            # Tabela inline com justificativa por linha
-            st.markdown("**Selecione a justificativa para cada divergência:**")
+            # Monta tabela com justificativa como coluna editável
             cols_exib = [c for c in ["Codigo","Descricao","Documento","Qtd WMS","Qtd ERP",
                                       "Divergencia Qtd","Divergencia Vl"] if c in df_div.columns]
+            df_just_edit = df_div[cols_exib].copy()
+            df_just_edit["Codigo"] = df_just_edit["Codigo"].astype(str).str.zfill(6)
+            df_just_edit["Justificativa"] = df_just_edit["Codigo"].map(
+                lambda p: justs_salvas.get(p, OPCOES_JUST[0]))
 
-            justs_edit = {}
-            for _, row in df_div.iterrows():
-                cod  = str(row.get("Codigo","")).zfill(6)
-                desc = str(row.get("Descricao",""))[:45]
-                dq   = row.get("Divergencia Qtd", 0)
-                dvl  = row.get("Divergencia Vl", 0)
+            col_cfg = {
+                "Codigo":         st.column_config.TextColumn("Código", disabled=True, width="small"),
+                "Descricao":      st.column_config.TextColumn("Descrição", disabled=True, width="large"),
+                "Documento":      st.column_config.TextColumn("Documento", disabled=True, width="small"),
+                "Qtd WMS":        st.column_config.NumberColumn("Qtd WMS", disabled=True, format="%.2f"),
+                "Qtd ERP":        st.column_config.NumberColumn("Qtd ERP", disabled=True, format="%.2f"),
+                "Divergencia Qtd":st.column_config.NumberColumn("Δ Qtd", disabled=True, format="%.2f"),
+                "Divergencia Vl": st.column_config.NumberColumn("Δ Valor", disabled=True, format="R$ %.2f"),
+                "Justificativa":  st.column_config.SelectboxColumn("Justificativa", options=OPCOES_JUST, required=True, width="medium"),
+            }
 
-                col_info, col_just = st.columns([3, 2])
-                with col_info:
-                    cor_dq = "#C0392B" if dq < 0 else "#27AE60"
-                    st.markdown(
-                        f"""<div style="background:#004550;border-radius:8px;padding:10px 14px;margin-bottom:4px;">
-                          <span style="color:#fff;font-weight:700;">{cod}</span>
-                          <span style="color:#aac8cc;font-size:0.85rem;margin-left:8px;">{desc}</span><br>
-                          <span style="color:{cor_dq};font-weight:bold;">Δ Qtd: {dq:+.2f}</span>
-                          <span style="color:{cor_dq};margin-left:12px;">Δ Vl: R$ {dvl:,.2f}</span>
-                        </div>""", unsafe_allow_html=True)
-                with col_just:
-                    val_salvo = justs_salvas.get(cod, OPCOES_JUST[0])
-                    idx = OPCOES_JUST.index(val_salvo) if val_salvo in OPCOES_JUST else 0
-                    just = st.selectbox("Justificativa", OPCOES_JUST,
-                                        index=idx, key=f"just4_{num_ciclo_conf}_{cod}",
-                                        label_visibility="collapsed")
-                    justs_edit[cod] = just
+            df_result = st.data_editor(
+                df_just_edit,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                column_config=col_cfg,
+                key=f"just_editor_{num_ciclo_conf}")
 
             if st.button("💾 Salvar justificativas", type="primary", key="btn_salvar_just4"):
+                justs_edit = dict(zip(df_result["Codigo"].astype(str), df_result["Justificativa"].astype(str)))
                 db_salvar_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf, justs_edit)
-                st.success("✅ Justificativas salvas! Avance para **NF de Ajuste** se necessário.")
+                st.success("✅ Justificativas salvas!")
+                n_ajuste = sum(1 for v in justs_edit.values() if v == "Ajuste de inventário")
+                if n_ajuste > 0:
+                    st.warning(f"⚠️ **{n_ajuste} produto(s)** com 'Ajuste de inventário' — faça o upload da NF na Etapa 5.")
                 st.rerun()
 
-            # Resumo: quantos precisam de NF de ajuste
-            n_ajuste = sum(1 for v in justs_edit.values() if v == "Ajuste de inventário")
-            if n_ajuste > 0:
-                st.warning(f"⚠️ **{n_ajuste} produto(s)** marcados como 'Ajuste de inventário' — faça o upload da NF na Etapa 5.")
+            # Resumo salvo
+            n_ajuste_salvo = sum(1 for v in justs_salvas.values() if v == "Ajuste de inventário")
+            if n_ajuste_salvo > 0:
+                st.warning(f"⚠️ **{n_ajuste_salvo} produto(s)** marcados como 'Ajuste de inventário' — faça o upload da NF na Etapa 5.")
 
     # ── ETAPA 5 — NF DE AJUSTE ────────────────────────────────────────────
     elif etapa_nav == 5:
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 5. Upload da NF de Ajuste")
-        st.caption("Importe o PDF da Nota Fiscal de baixa/perda gerada para os itens com 'Ajuste de inventário'.")
+        st.caption("Importe o PDF da Nota Fiscal de baixa/perda e informe os dados dos itens.")
 
         if not ciclo_ativo:
             st.warning("⚠️ Nenhum ciclo ativo. Gere a lista primeiro."); return
 
         num_ciclo_nf = ciclo_ativo.get("num_ciclo","")
 
-        # Verifica quais produtos precisam de NF
-        justs_conf = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_nf)
-        prods_ajuste = {p: j for p,j in justs_conf.items() if j == "Ajuste de inventário"}
+        # Lê justificativas diretamente do banco (não do cache)
+        justs_conf   = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_nf)
+        prods_ajuste = {p: j for p,j in justs_conf.items()
+                        if j == "Ajuste de inventário" and not p.startswith("_")}
 
-        if not prods_ajuste:
-            st.success("✅ Nenhum produto marcado como 'Ajuste de inventário'. Esta etapa é opcional.")
+        if prods_ajuste:
+            st.info(f"**{len(prods_ajuste)} produto(s)** com 'Ajuste de inventário': {', '.join(prods_ajuste.keys())}")
         else:
-            st.info(f"**{len(prods_ajuste)} produto(s)** aguardam NF de ajuste: {', '.join(prods_ajuste.keys())}")
+            st.success("✅ Nenhum produto marcado como 'Ajuste de inventário'. Esta etapa é opcional.")
 
         # NFs já salvas
         if nf_ajustes_ativo:
-            st.markdown(f"**{len(nf_ajustes_ativo)} NF(s) importada(s):**")
+            st.markdown(f"**{len(nf_ajustes_ativo)} NF(s) já importada(s):**")
             for nf in nf_ajustes_ativo:
                 with st.expander(f"NF {nf.get('num_nf','—')} · {nf.get('data_nf','—')} · {nf.get('natureza','—')} · {len(nf.get('dados',[]))} item(ns)"):
                     df_nf_prev = pd.DataFrame(nf["dados"])
@@ -1069,9 +1070,14 @@ def render(df_jlle, df_outras, formatar_br):
                         st.dataframe(df_nf_prev, use_container_width=True, hide_index=True)
 
         st.markdown("---")
-        st.markdown("##### Importar NF de ajuste")
+        st.markdown("##### Importar nova NF de ajuste")
 
-        # Campos manuais da NF (extraídos do PDF)
+        # Upload do PDF (informativo — extrai número e data do nome do arquivo)
+        arq_pdf = st.file_uploader("📎 Selecione o PDF da NF (opcional — apenas para referência)",
+                                    type=["pdf"], key=f"nf_pdf_{num_ciclo_nf}_{len(nf_ajustes_ativo)}")
+        if arq_pdf:
+            st.success(f"✅ PDF carregado: **{arq_pdf.name}** ({arq_pdf.size/1024:.1f} KB)")
+
         col_nf1, col_nf2, col_nf3 = st.columns(3)
         with col_nf1:
             num_nf_input = st.text_input("Nº da NF", key="nf_num", placeholder="000009983")
@@ -1083,27 +1089,29 @@ def render(df_jlle, df_outras, formatar_br):
         st.markdown("##### Itens da NF")
         st.caption("Informe os produtos, quantidades e valores conforme a NF.")
 
-        # Tabela dinâmica de itens
-        if "nf_itens" not in st.session_state:
-            # Pré-popula com produtos que precisam de ajuste
+        # Pré-popula com produtos que precisam de ajuste (lendo do banco agora)
+        _nf_key = f"nf_itens_{num_ciclo_nf}"
+        if _nf_key not in st.session_state:
+            itens_pre = []
             if erp_uploads_ativo and prods_ajuste:
                 df_erp_ref = pd.concat(
                     [pd.DataFrame(u["dados"]) for u in erp_uploads_ativo if u.get("dados")],
-                    ignore_index=True).drop_duplicates(subset=["Codigo"], keep="last") if erp_uploads_ativo else pd.DataFrame()
-                itens_pre = []
-                for p in prods_ajuste:
-                    row_erp = df_erp_ref[df_erp_ref["Codigo"].astype(str).str.zfill(6) == p] if not df_erp_ref.empty else pd.DataFrame()
-                    desc = str(row_erp["Descricao"].iloc[0]) if not row_erp.empty and "Descricao" in row_erp.columns else ""
-                    dq   = abs(float(row_erp["Divergencia Qtd"].iloc[0])) if not row_erp.empty and "Divergencia Qtd" in row_erp.columns else 0.0
-                    dvl  = abs(float(row_erp["Divergencia Vl"].iloc[0]))  if not row_erp.empty and "Divergencia Vl" in row_erp.columns else 0.0
-                    itens_pre.append({"Codigo": p, "Descricao": desc, "Qtd": dq, "Vl Unit": dvl/dq if dq else 0, "Vl Total": dvl})
-                st.session_state["nf_itens"] = itens_pre
-            else:
-                st.session_state["nf_itens"] = [{"Codigo":"","Descricao":"","Qtd":0.0,"Vl Unit":0.0,"Vl Total":0.0}]
+                    ignore_index=True)
+                if not df_erp_ref.empty and "Codigo" in df_erp_ref.columns:
+                    df_erp_ref = df_erp_ref.drop_duplicates(subset=["Codigo"], keep="last")
+                    for p in prods_ajuste:
+                        row_e = df_erp_ref[df_erp_ref["Codigo"].astype(str).str.zfill(6) == p]
+                        desc  = str(row_e["Descricao"].iloc[0]) if not row_e.empty and "Descricao" in row_e.columns else ""
+                        dq    = abs(float(row_e["Divergencia Qtd"].iloc[0])) if not row_e.empty and "Divergencia Qtd" in row_e.columns else 0.0
+                        dvl   = abs(float(row_e["Divergencia Vl"].iloc[0]))  if not row_e.empty and "Divergencia Vl"  in row_e.columns else 0.0
+                        vu    = dvl/dq if dq else 0.0
+                        itens_pre.append({"Codigo": p, "Descricao": desc, "Qtd": dq, "Vl Unit": vu, "Vl Total": dvl})
+            if not itens_pre:
+                itens_pre = [{"Codigo":"","Descricao":"","Qtd":0.0,"Vl Unit":0.0,"Vl Total":0.0}]
+            st.session_state[_nf_key] = itens_pre
 
-        df_nf_edit = pd.DataFrame(st.session_state["nf_itens"])
         df_nf_edit_result = st.data_editor(
-            df_nf_edit,
+            pd.DataFrame(st.session_state[_nf_key]),
             use_container_width=True,
             num_rows="dynamic",
             key="nf_editor",
@@ -1126,7 +1134,7 @@ def render(df_jlle, df_outras, formatar_br):
                 dados_nf = df_nf_edit_result.dropna(subset=["Codigo"]).to_dict("records")
                 db_salvar_nf_ajuste(engine_db, empresa_sel, filial_sel, num_ciclo_nf,
                                      num_nf_input.strip(), data_nf_iso, nat_nf_input.strip(), dados_nf)
-                st.session_state.pop("nf_itens", None)
+                st.session_state.pop(_nf_key, None)
                 st.session_state["ic_force_reload"] = True
                 st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
                 st.success(f"✅ NF {num_nf_input} salva com {len(dados_nf)} item(ns)!")
