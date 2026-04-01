@@ -326,29 +326,21 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     data_ini = min(datas) if datas else "—"
     data_fim = max(datas) if datas else "—"
 
-    # KPIs consolidados
-    total_skus_cont = sum(
-        len(dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame()))
-        for c in ciclos_sel
-    )
-    acur_vals = []
+    # KPIs consolidados — calculados direto do df_rel (Diferença Invent)
+    total_skus_cont   = 0
+    total_divergentes = 0
     for c in ciclos_sel:
-        a = c.get("acuracidade","")
-        # Tenta do campo direto
-        try:
-            v = float(str(a).replace("%","").replace(",","."))
-            if v > 0: acur_vals.append(v)
-        except: pass
-        # Fallback: calcula a partir do df_rel se disponível
-        if not acur_vals:
-            df_c = dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame())
-            if not df_c.empty and "Acuracidade" in df_c.columns:
-                for av in df_c["Acuracidade"].dropna():
-                    try:
-                        v = float(str(av).replace("%","").replace(",","."))
-                        if v > 0: acur_vals.append(v)
-                    except: pass
-    acur_media = f"{sum(acur_vals)/len(acur_vals):.1f}%" if acur_vals else "N/D"
+        df_c = dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame())
+        if not df_c.empty:
+            total_skus_cont += len(df_c)
+            if "Diferença Invent" in df_c.columns:
+                total_divergentes += int(
+                    (pd.to_numeric(df_c["Diferença Invent"], errors="coerce").fillna(0) != 0).sum()
+                )
+    acur_media = (
+        f"{(total_skus_cont - total_divergentes) / total_skus_cont * 100:.1f}%"
+        if total_skus_cont > 0 else "N/D"
+    )
     cobertura_max = max((c.get("cobertura_pct",0) for c in ciclos_sel), default=0)
     n_ciclos = len(ciclos_sel)
 
@@ -371,11 +363,11 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     elems.append(HRFlowable(width="100%", thickness=1, color=C_ORANGE))
     elems.append(Spacer(1, 0.3*cm))
 
-    kpi_labels = ["SKUs Contados", "Cobertura KPMG", "Acuracidade Média", "Ciclos Realizados"]
-    kpi_values = [str(total_skus_cont), f"{cobertura_max:.1f}%", acur_media, str(n_ciclos)]
+    kpi_labels = ["SKUs Contados", "SKUs Divergentes", "Acuracidade", "Cobertura KPMG", "Ciclos Realizados"]
+    kpi_values = [str(total_skus_cont), str(total_divergentes), acur_media, f"{cobertura_max:.1f}%", str(n_ciclos)]
     kpi_row_l  = [Paragraph(l, s_kpi_lbl) for l in kpi_labels]
     kpi_row_v  = [Paragraph(v, s_kpi_val) for v in kpi_values]
-    kpi_t = Table([kpi_row_l, kpi_row_v], colWidths=[4*cm]*4)
+    kpi_t = Table([kpi_row_l, kpi_row_v], colWidths=[3.2*cm]*5)
     kpi_t.setStyle(TableStyle([
         ("BACKGROUND",     (0,0), (-1,-1), C_TEAL),
         ("BOX",            (0,0), (-1,-1), 0.5, C_DARK),
@@ -391,9 +383,11 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     status_cobertura = "CUMPRIDA ✓" if cobertura_max >= 100 else "EM ANDAMENTO"
     elems.append(Paragraph(
         f"A unidade {label_unidade} realizou {n_ciclos} ciclo(s) de inventário no período de "
-        f"{data_ini} a {data_fim}. A cobertura acumulada atingiu {cobertura_max:.1f}% dos SKUs "
-        f"cadastrados, com acuracidade média de {acur_media}. "
-        f"Exigência KPMG de cobertura anual: <b>{status_cobertura}</b> ({cobertura_max:.1f}%).",
+        f"{data_ini} a {data_fim}. Foram contados <b>{total_skus_cont} SKUs</b>, dos quais "
+        f"<b>{total_divergentes} apresentaram divergência</b> entre saldo ERP e inventariado. "
+        f"A acuracidade calculada foi de <b>{acur_media}</b> e a cobertura acumulada atingiu "
+        f"<b>{cobertura_max:.1f}%</b> dos SKUs cadastrados. "
+        f"Exigência KPMG de cobertura anual: <b>{status_cobertura}</b>.",
         sty("ctx", fontSize=9, textColor=colors.black, leading=13)
     ))
 
