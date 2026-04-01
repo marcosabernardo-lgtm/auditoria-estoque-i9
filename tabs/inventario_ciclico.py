@@ -333,10 +333,22 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     )
     acur_vals = []
     for c in ciclos_sel:
-        a = c.get("acuracidade","0%")
-        try: acur_vals.append(float(str(a).replace("%","").replace(",",".")))
+        a = c.get("acuracidade","")
+        # Tenta do campo direto
+        try:
+            v = float(str(a).replace("%","").replace(",","."))
+            if v > 0: acur_vals.append(v)
         except: pass
-    acur_media = f"{sum(acur_vals)/len(acur_vals):.1f}%" if acur_vals else "—"
+        # Fallback: calcula a partir do df_rel se disponível
+        if not acur_vals:
+            df_c = dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame())
+            if not df_c.empty and "Acuracidade" in df_c.columns:
+                for av in df_c["Acuracidade"].dropna():
+                    try:
+                        v = float(str(av).replace("%","").replace(",","."))
+                        if v > 0: acur_vals.append(v)
+                    except: pass
+    acur_media = f"{sum(acur_vals)/len(acur_vals):.1f}%" if acur_vals else "N/D"
     cobertura_max = max((c.get("cobertura_pct",0) for c in ciclos_sel), default=0)
     n_ciclos = len(ciclos_sel)
 
