@@ -52,7 +52,7 @@ def estilizar_tabela(df):
         elif any(x in col for x in ["Vl Unit", "Vl Total", "Preço", "Vl Divergência", "Vl Total ERP"]): fmt_cols[col] = "R$ {:,.2f}"
     styled = df.style.apply(lambda r: ['background-color: #005562; color: #ffffff; font-size: 0.84rem;'] * len(r), axis=1)
     if "Status" in df.columns:
-        styled = styled.applymap(lambda v: 'background-color: #722f1d; color: #ffffff; font-weight: bold; border: 1px solid #EC6E21;' if v == "Divergente" else ('background-color: #1a4a32; color: #b3ffcc; font-weight: bold;' if v == "OK" else ''), subset=["Status"])
+        styled = styled.map(lambda v: 'background-color: #722f1d; color: #ffffff; font-weight: bold; border: 1px solid #EC6E21;' if v == "Divergente" else ('background-color: #1a4a32; color: #b3ffcc; font-weight: bold;' if v == "OK" else ''), subset=["Status"])
     styled = styled.set_table_styles([
         {'selector': 'thead th', 'props': [('background-color', '#004550'), ('color', '#ffffff'), ('border-bottom', '2px solid #EC6E21'), ('text-transform', 'uppercase')]},
         {'selector': 'td', 'props': [('padding', '8px 12px'), ('border-bottom', '1px solid rgba(255,255,255,0.05)')]}
