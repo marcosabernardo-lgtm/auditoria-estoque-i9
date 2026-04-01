@@ -865,7 +865,7 @@ def render(df_jlle, df_outras, formatar_br):
 
                 st.dataframe(
                     df_erp[cols_prev].style
-                    .applymap(_style_erp2, subset=[c for c in ["Divergencia Qtd","Divergencia Vl"] if c in cols_prev])
+                    .map(_style_erp2, subset=[c for c in ["Divergencia Qtd","Divergencia Vl"] if c in cols_prev])
                     .format({"Qtd WMS":"{:,.2f}","Qtd ERP":"{:,.2f}",
                              "Divergencia Qtd":"{:,.2f}","Divergencia Vl":"R$ {:,.2f}"}, na_rep="—"),
                     use_container_width=True, hide_index=True)
@@ -1176,7 +1176,7 @@ def render(df_jlle, df_outras, formatar_br):
                                       "Diferença Invent","Vl Total Diferença"] if c in df_div.columns]
             st.dataframe(
                 df_div[cols_exib].style
-                .applymap(lambda v: "color:#C0392B;font-weight:bold" if isinstance(v,(int,float)) and v > 0
+                .map(lambda v: "color:#C0392B;font-weight:bold" if isinstance(v,(int,float)) and v > 0
                           else ("color:#27AE60;font-weight:bold" if isinstance(v,(int,float)) and v < 0 else ""),
                           subset=[c for c in ["Diferença Invent","Vl Total Diferença"] if c in cols_exib])
                 .format({
@@ -1340,7 +1340,7 @@ def render(df_jlle, df_outras, formatar_br):
                 st.markdown("#### Relatório de fechamento")
                 st.dataframe(
                     df_rel_fech.style
-                    .applymap(_style_fech, subset=[c for c in ["Divergência","Vl Divergência"] if c in df_rel_fech.columns])
+                    .map(_style_fech, subset=[c for c in ["Divergência","Vl Divergência"] if c in df_rel_fech.columns])
                     .format({
                         "Qtd WMS":        "{:,.2f}",
                         "Vl WMS":         "R$ {:,.2f}",
