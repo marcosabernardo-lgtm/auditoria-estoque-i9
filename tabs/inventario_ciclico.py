@@ -1089,11 +1089,11 @@ def render(df_jlle, df_outras, formatar_br):
 
         col_nf1, col_nf2, col_nf3 = st.columns(3)
         with col_nf1:
-            num_nf_input = st.text_input("Nº da NF", placeholder="000009983")
+            num_nf_input  = st.text_input("Nº da NF",   key=f"nf_num_{num_ciclo_nf}_{_nf_idx}",  placeholder="000009983")
         with col_nf2:
-            data_nf_input = st.text_input("Data da NF", placeholder="28/01/2026")
+            data_nf_input = st.text_input("Data da NF", key=f"nf_data_{num_ciclo_nf}_{_nf_idx}", placeholder="28/01/2026")
         with col_nf3:
-            nat_nf_input = st.text_input("Natureza", value="BAIXA PERDA")
+            nat_nf_input  = st.text_input("Natureza",   key=f"nf_nat_{num_ciclo_nf}_{_nf_idx}",  value="BAIXA PERDA")
 
         st.markdown("##### Itens da NF")
         st.caption("Informe os produtos, quantidades e valores conforme a NF.")
@@ -1140,7 +1140,6 @@ def render(df_jlle, df_outras, formatar_br):
                 dados_nf = df_nf_edit_result.dropna(subset=["Codigo"]).to_dict("records")
                 db_salvar_nf_ajuste(engine_db, empresa_sel, filial_sel, num_ciclo_nf,
                                      num_nf_input.strip(), data_nf_iso, nat_nf_input.strip(), dados_nf)
-                st.session_state.pop(_nf_key, None)
                 st.session_state["ic_force_reload"] = True
                 st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
                 st.success(f"✅ NF {num_nf_input} salva com {len(dados_nf)} item(ns)!")
