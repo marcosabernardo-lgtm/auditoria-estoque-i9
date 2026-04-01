@@ -731,7 +731,18 @@ def render(df_jlle, df_outras, formatar_br):
             qtd_ciclo = max(1,int(total_skus*pmap[pl]))
             st.caption(f"→ {qtd_ciclo} itens de {total_skus}")
 
-        df_lista = montar_lista(df_score, qtd_ciclo, contados)
+        # ── MODO TESTE: lista fixa com 3 produtos ──────────────────────────
+        _PRODS_TESTE = ["003877", "009307", "003926"]
+        _df_teste = df_score[df_score["Produto"].astype(str).str.zfill(6).isin(_PRODS_TESTE)].copy()
+        if not _df_teste.empty and len(_df_teste) == len(_PRODS_TESTE):
+            _df_teste["Origem"] = "🔴 Alta prioridade"
+            _df_teste = _df_teste.reset_index(drop=True)
+            _df_teste.index = _df_teste.index + 1
+            df_lista = _df_teste
+            st.info(f"🧪 **Modo teste** — lista fixada com {len(_PRODS_TESTE)} produtos: {', '.join(_PRODS_TESTE)}")
+        else:
+            df_lista = montar_lista(df_score, qtd_ciclo, contados)
+        # ── FIM MODO TESTE ──────────────────────────────────────────────────
         qp = int((df_lista["Origem"]=="🔴 Alta prioridade").sum())
         qk = int((df_lista["Origem"]=="⬜ Cobertura KPMG").sum())
         st.markdown(f"**{len(df_lista)} itens** — <span style='color:#EC6E21'>🔴 {qp} prioridade</span> · <span style='color:#27AE60'>⬜ {qk} KPMG</span>",
