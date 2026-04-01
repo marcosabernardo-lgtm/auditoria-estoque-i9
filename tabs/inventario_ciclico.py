@@ -1089,41 +1089,38 @@ def render(df_jlle, df_outras, formatar_br):
 
         col_nf1, col_nf2, col_nf3 = st.columns(3)
         with col_nf1:
-            num_nf_input = st.text_input("Nº da NF", value="", key=f"nf_num_{num_ciclo_nf}_{len(nf_ajustes_ativo)}", placeholder="000009983")
+            num_nf_input = st.text_input("Nº da NF", placeholder="000009983")
         with col_nf2:
-            data_nf_input = st.text_input("Data da NF", value="", key=f"nf_data_{num_ciclo_nf}_{len(nf_ajustes_ativo)}", placeholder="28/01/2026")
+            data_nf_input = st.text_input("Data da NF", placeholder="28/01/2026")
         with col_nf3:
-            nat_nf_input = st.text_input("Natureza", value="BAIXA PERDA", key=f"nf_nat_{num_ciclo_nf}_{len(nf_ajustes_ativo)}")
+            nat_nf_input = st.text_input("Natureza", value="BAIXA PERDA")
 
         st.markdown("##### Itens da NF")
         st.caption("Informe os produtos, quantidades e valores conforme a NF.")
 
-        # Pré-popula com produtos que precisam de ajuste (lendo do banco agora)
-        _nf_key = f"nf_itens_{num_ciclo_nf}_{len(nf_ajustes_ativo)}"
-        if _nf_key not in st.session_state:
-            itens_pre = []
-            if erp_uploads_ativo and prods_ajuste:
-                df_erp_ref = pd.concat(
-                    [pd.DataFrame(u["dados"]) for u in erp_uploads_ativo if u.get("dados")],
-                    ignore_index=True)
-                if not df_erp_ref.empty and "Codigo" in df_erp_ref.columns:
-                    df_erp_ref = df_erp_ref.drop_duplicates(subset=["Codigo"], keep="last")
-                    for p in prods_ajuste:
-                        row_e = df_erp_ref[df_erp_ref["Codigo"].astype(str).str.zfill(6) == p]
-                        desc  = str(row_e["Descricao"].iloc[0]) if not row_e.empty and "Descricao" in row_e.columns else ""
-                        dq    = abs(float(row_e["Divergencia Qtd"].iloc[0])) if not row_e.empty and "Divergencia Qtd" in row_e.columns else 0.0
-                        dvl   = abs(float(row_e["Divergencia Vl"].iloc[0]))  if not row_e.empty and "Divergencia Vl"  in row_e.columns else 0.0
-                        vu    = dvl/dq if dq else 0.0
-                        itens_pre.append({"Codigo": p, "Descricao": desc, "Qtd": dq, "Vl Unit": vu, "Vl Total": dvl})
-            if not itens_pre:
-                itens_pre = [{"Codigo":"","Descricao":"","Qtd":0.0,"Vl Unit":0.0,"Vl Total":0.0}]
-            st.session_state[_nf_key] = itens_pre
+        # Sempre recalcula os itens — nunca usa session_state
+        itens_pre = []
+        if erp_uploads_ativo and prods_ajuste:
+            df_erp_ref = pd.concat(
+                [pd.DataFrame(u["dados"]) for u in erp_uploads_ativo if u.get("dados")],
+                ignore_index=True)
+            if not df_erp_ref.empty and "Codigo" in df_erp_ref.columns:
+                df_erp_ref = df_erp_ref.drop_duplicates(subset=["Codigo"], keep="last")
+                for p in prods_ajuste:
+                    row_e = df_erp_ref[df_erp_ref["Codigo"].astype(str).str.zfill(6) == p]
+                    desc  = str(row_e["Descricao"].iloc[0]) if not row_e.empty and "Descricao" in row_e.columns else ""
+                    dq    = abs(float(row_e["Divergencia Qtd"].iloc[0])) if not row_e.empty and "Divergencia Qtd" in row_e.columns else 0.0
+                    dvl   = abs(float(row_e["Divergencia Vl"].iloc[0]))  if not row_e.empty and "Divergencia Vl"  in row_e.columns else 0.0
+                    vu    = dvl/dq if dq else 0.0
+                    itens_pre.append({"Codigo": p, "Descricao": desc, "Qtd": dq, "Vl Unit": vu, "Vl Total": dvl})
+        if not itens_pre:
+            itens_pre = [{"Codigo":"","Descricao":"","Qtd":0.0,"Vl Unit":0.0,"Vl Total":0.0}]
 
         df_nf_edit_result = st.data_editor(
-            pd.DataFrame(st.session_state[_nf_key]),
+            pd.DataFrame(itens_pre),
             use_container_width=True,
             num_rows="dynamic",
-            key="nf_editor",
+            key=f"nf_editor_{num_ciclo_nf}_{len(nf_ajustes_ativo)}",
             column_config={
                 "Codigo":   st.column_config.TextColumn("Código", width="small"),
                 "Descricao":st.column_config.TextColumn("Descrição", width="large"),
