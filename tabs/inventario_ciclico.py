@@ -1049,20 +1049,15 @@ def render(df_jlle, df_outras, formatar_br):
             st.warning("⚠️ Nenhum ciclo ativo. Gere a lista primeiro."); return
 
         num_ciclo_nf = ciclo_ativo.get("num_ciclo","")
+        _nf_idx = len(nf_ajustes_ativo)  # índice único por NF nova
 
         # Lê justificativas diretamente do banco (não do cache)
         justs_conf   = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_nf)
         prods_ajuste = {p: j for p,j in justs_conf.items()
                         if j == "Ajuste de inventário" and not p.startswith("_")}
 
-        # Limpa cache quando não há NF salva (evita reutilizar dados de ciclos anteriores)
-        _nf_key = f"nf_itens_{num_ciclo_nf}"
-        # Limpa TODAS as variações de chaves de session_state da NF antes de renderizar
-        _sufixo = f"{num_ciclo_nf}_{len(nf_ajustes_ativo)}"
-        _chaves_limpar = [k for k in list(st.session_state.keys())
-                          if any(k.startswith(p) for p in ["nf_num_","nf_data_","nf_nat_","nf_itens_","nf_editor"])]
-        for _k in _chaves_limpar:
-            del st.session_state[_k]
+        # Limpa chaves antigas do session_state ao entrar com nova NF
+        _nf_key = f"nf_itens_{num_ciclo_nf}_{_nf_idx}"
 
         if prods_ajuste:
             st.info(f"**{len(prods_ajuste)} produto(s)** com 'Ajuste de inventário': {', '.join(prods_ajuste.keys())}")
