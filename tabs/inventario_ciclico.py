@@ -17,6 +17,7 @@ try:
         db_obter_justificativas, db_salvar_justificativas,
         db_obter_erp_upload, db_obter_erp_uploads, db_salvar_erp_upload,
         db_obter_nf_ajustes, db_salvar_nf_ajuste,
+        db_obter_documentos_conferidos,
     )
     DB_DISPONIVEL = True
 except ImportError:
@@ -326,21 +327,29 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     data_ini = min(datas) if datas else "—"
     data_fim = max(datas) if datas else "—"
 
-    # KPIs consolidados — calculados direto do df_rel (Diferença Invent)
-    total_skus_cont   = 0
-    total_divergentes = 0
-    for c in ciclos_sel:
-        df_c = dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame())
-        if not df_c.empty:
-            total_skus_cont += len(df_c)
-            if "Diferença Invent" in df_c.columns:
-                total_divergentes += int(
-                    (pd.to_numeric(df_c["Diferença Invent"], errors="coerce").fillna(0) != 0).sum()
-                )
-    acur_media = (
-        f"{(total_skus_cont - total_divergentes) / total_skus_cont * 100:.1f}%"
-        if total_skus_cont > 0 else "N/D"
+    # KPIs consolidados
+    total_skus_cont = sum(
+        len(dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame()))
+        for c in ciclos_sel
     )
+    acur_vals = []
+    for c in ciclos_sel:
+        a = c.get("acuracidade","")
+        # Tenta do campo direto
+        try:
+            v = float(str(a).replace("%","").replace(",","."))
+            if v > 0: acur_vals.append(v)
+        except: pass
+        # Fallback: calcula a partir do df_rel se disponível
+        if not acur_vals:
+            df_c = dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame())
+            if not df_c.empty and "Acuracidade" in df_c.columns:
+                for av in df_c["Acuracidade"].dropna():
+                    try:
+                        v = float(str(av).replace("%","").replace(",","."))
+                        if v > 0: acur_vals.append(v)
+                    except: pass
+    acur_media = f"{sum(acur_vals)/len(acur_vals):.1f}%" if acur_vals else "N/D"
     cobertura_max = max((c.get("cobertura_pct",0) for c in ciclos_sel), default=0)
     n_ciclos = len(ciclos_sel)
 
@@ -363,11 +372,11 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     elems.append(HRFlowable(width="100%", thickness=1, color=C_ORANGE))
     elems.append(Spacer(1, 0.3*cm))
 
-    kpi_labels = ["SKUs Contados", "SKUs Divergentes", "Acuracidade", "Cobertura KPMG", "Ciclos Realizados"]
-    kpi_values = [str(total_skus_cont), str(total_divergentes), acur_media, f"{cobertura_max:.1f}%", str(n_ciclos)]
+    kpi_labels = ["SKUs Contados", "Cobertura KPMG", "Acuracidade Média", "Ciclos Realizados"]
+    kpi_values = [str(total_skus_cont), f"{cobertura_max:.1f}%", acur_media, str(n_ciclos)]
     kpi_row_l  = [Paragraph(l, s_kpi_lbl) for l in kpi_labels]
     kpi_row_v  = [Paragraph(v, s_kpi_val) for v in kpi_values]
-    kpi_t = Table([kpi_row_l, kpi_row_v], colWidths=[3.2*cm]*5)
+    kpi_t = Table([kpi_row_l, kpi_row_v], colWidths=[4*cm]*4)
     kpi_t.setStyle(TableStyle([
         ("BACKGROUND",     (0,0), (-1,-1), C_TEAL),
         ("BOX",            (0,0), (-1,-1), 0.5, C_DARK),
@@ -383,11 +392,9 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     status_cobertura = "CUMPRIDA ✓" if cobertura_max >= 100 else "EM ANDAMENTO"
     elems.append(Paragraph(
         f"A unidade {label_unidade} realizou {n_ciclos} ciclo(s) de inventário no período de "
-        f"{data_ini} a {data_fim}. Foram contados <b>{total_skus_cont} SKUs</b>, dos quais "
-        f"<b>{total_divergentes} apresentaram divergência</b> entre saldo ERP e inventariado. "
-        f"A acuracidade calculada foi de <b>{acur_media}</b> e a cobertura acumulada atingiu "
-        f"<b>{cobertura_max:.1f}%</b> dos SKUs cadastrados. "
-        f"Exigência KPMG de cobertura anual: <b>{status_cobertura}</b>.",
+        f"{data_ini} a {data_fim}. A cobertura acumulada atingiu {cobertura_max:.1f}% dos SKUs "
+        f"cadastrados, com acuracidade média de {acur_media}. "
+        f"Exigência KPMG de cobertura anual: <b>{status_cobertura}</b> ({cobertura_max:.1f}%).",
         sty("ctx", fontSize=9, textColor=colors.black, leading=13)
     ))
 
@@ -448,23 +455,16 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         elems.append(Spacer(1, 0.3*cm))
 
         # Metadados do ciclo em grid 3x2
-        # Calcula SKUs divergentes e acuracidade real a partir do df_rel
-        if not df_rel.empty and "Diferença Invent" in df_rel.columns:
-            n_diverg = int((pd.to_numeric(df_rel["Diferença Invent"], errors="coerce").fillna(0) != 0).sum())
-        else:
-            n_diverg = 0
-        acur_calc = f"{(n_sku - n_diverg) / n_sku * 100:.1f}%" if n_sku > 0 else "—"
-
         meta_data = [
             [Paragraph("Data da contagem", s_det_label), Paragraph(c.get("data","—"), s_det_val),
              Paragraph("Nº Inventário",    s_det_label), Paragraph(c.get("num_inv","—"), s_det_val),
              Paragraph("Status",           s_det_label), Paragraph(c.get("status","—"), s_det_val)],
             [Paragraph("Responsável",      s_det_label), Paragraph(c.get("responsavel","—"), s_det_val),
-             Paragraph("Acuracidade",      s_det_label), Paragraph(acur_calc, s_det_val),
+             Paragraph("Acuracidade",      s_det_label), Paragraph(str(c.get("acuracidade","—")), s_det_val),
              Paragraph("SKUs contados",    s_det_label), Paragraph(str(n_sku), s_det_val)],
             [Paragraph("SKUs na lista",    s_det_label), Paragraph(str(c.get("qtd_lista","—")), s_det_val),
              Paragraph("Cobertura",        s_det_label), Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_det_val),
-             Paragraph("SKUs divergentes", s_det_label), Paragraph(str(n_diverg), s_det_val)],
+             Paragraph("", s_det_label), Paragraph("", s_det_val)],
         ]
         tbl_meta = Table(meta_data, colWidths=[3*cm, 4.5*cm, 2.5*cm, 3*cm, 2.5*cm, 3*cm])
         tbl_meta.setStyle(TableStyle([
@@ -1183,80 +1183,103 @@ def render(df_jlle, df_outras, formatar_br):
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 4. Conferência de divergências")
-        st.caption("Revise as divergências entre WMS e ERP e registre justificativas por produto.")
+        st.caption("Revise as divergências do upload atual e registre justificativas.")
 
         if not ciclo_ativo:
             st.warning("⚠️ Nenhum ciclo ativo. Gere a lista primeiro."); return
 
         num_ciclo_conf = ciclo_ativo.get("num_ciclo","")
 
-        # Produtos efetivamente inventariados neste ciclo (vindos dos uploads)
-        prods_inventariados = set()
-        for u in _uploads:
-            prods_inventariados.update(str(p).strip().zfill(6) for p in u.get("produtos",[]))
+        # Documentos ERP já conferidos
+        docs_conferidos = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, num_ciclo_conf)
 
-        # Monta df apenas com os produtos inventariados e filtra divergências
+        # Uploads ERP ainda NÃO conferidos
+        uploads_pendentes = [u for u in erp_uploads_ativo if u.get("documento","") not in docs_conferidos]
+        uploads_conferidos = [u for u in erp_uploads_ativo if u.get("documento","") in docs_conferidos]
+
+        if uploads_conferidos:
+            st.success(f"✅ {len(uploads_conferidos)} upload(s) já conferido(s): {', '.join(u.get('documento','') for u in uploads_conferidos)}")
+
+        if not uploads_pendentes:
+            st.success("✅ Todos os uploads foram conferidos!")
+            if not erp_uploads_ativo:
+                st.warning("⚠️ Faça o Upload ERP (etapa 2) primeiro.")
+            return
+
+        # Upload atual a conferir (o mais recente não conferido)
+        upload_atual = uploads_pendentes[-1]
+        doc_atual = upload_atual.get("documento","—")
+        st.info(f"📋 Conferindo upload: **Documento {doc_atual}** · {upload_atual.get('data_upload','—')} · {len(upload_atual.get('dados',[]))} produto(s)")
+
+        # Monta df de divergências apenas do upload atual
         df_div = pd.DataFrame()
-        if _uploads and not df_filial.empty:
-            df_div = montar_df_relatorio(_uploads, df_filial)
-            if not df_div.empty:
-                # Garante que só aparecem produtos que foram inventariados no ciclo
-                if "Produto" in df_div.columns:
-                    df_div = df_div[df_div["Produto"].astype(str).str.zfill(6).isin(prods_inventariados)].copy()
-                if "Diferença Invent" in df_div.columns:
-                    df_div = df_div[df_div["Diferença Invent"] != 0].copy()
+        dados_atual = upload_atual.get("dados",[])
+        if dados_atual:
+            df_erp_atual = pd.DataFrame(dados_atual)
+            if not df_erp_atual.empty and "Codigo" in df_erp_atual.columns:
+                df_erp_atual["Codigo"] = df_erp_atual["Codigo"].astype(str).str.zfill(6)
+                if "Divergencia Qtd" in df_erp_atual.columns:
+                    df_div = df_erp_atual[df_erp_atual["Divergencia Qtd"] != 0].copy()
+                else:
+                    df_div = df_erp_atual.copy()
+
+        OPCOES_JUST = [
+            "Ajuste de inventário",
+            "Diferença de contagem",
+            "Movimentação não registrada",
+            "Produto em trânsito",
+            "Erro de digitação",
+            "Outros",
+        ]
+
+        # Carrega justificativas já salvas para este documento
+        justs_salvas = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf)
 
         if df_div.empty:
-            st.success("✅ Nenhuma divergência encontrada nos uploads realizados.")
-            st.session_state[f"ic_conf_ok_{num_ciclo_conf}"] = True
+            st.success("✅ Nenhuma divergência neste upload.")
+            if st.button("✔ Confirmar conferência sem divergências", type="primary", key="btn_conf_sem_div"):
+                db_salvar_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf,
+                                          {"_ok": "Sem divergências"}, documento=doc_atual)
+                st.success(f"✅ Upload {doc_atual} conferido!")
+                st.rerun()
         else:
-            st.info(f"**{len(df_div)} produto(s) com divergência** — adicione justificativas abaixo.")
+            st.info(f"**{len(df_div)} produto(s) com divergência** neste upload:")
 
-            # Carrega justificativas já salvas
-            justs_salvas = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf)
-            # Se já há justificativas salvas, marca conferência como concluída
-            if justs_salvas:
-                st.session_state[f"ic_conf_ok_{num_ciclo_conf}"] = True
+            cols_exib = [c for c in ["Codigo","Descricao","Documento","Qtd WMS","Qtd ERP",
+                                      "Divergencia Qtd","Divergencia Vl"] if c in df_div.columns]
+            df_just_edit = df_div[cols_exib].copy()
+            df_just_edit["Codigo"] = df_just_edit["Codigo"].astype(str).str.zfill(6)
+            df_just_edit["Justificativa"] = df_just_edit["Codigo"].map(
+                lambda p: justs_salvas.get(p, OPCOES_JUST[0]))
 
-            cols_exib = [c for c in ["Produto","Descrição","Saldo ERP (Total)","Invent WMS",
-                                      "Diferença Invent","Vl Total Diferença"] if c in df_div.columns]
-            st.dataframe(
-                df_div[cols_exib].style
-                .map(lambda v: "color:#C0392B;font-weight:bold" if isinstance(v,(int,float)) and v > 0
-                          else ("color:#27AE60;font-weight:bold" if isinstance(v,(int,float)) and v < 0 else ""),
-                          subset=[c for c in ["Diferença Invent","Vl Total Diferença"] if c in cols_exib])
-                .format({
-                    "Saldo ERP (Total)": "{:,.2f}",
-                    "Invent WMS":        "{:,.2f}",
-                    "Diferença Invent":  lambda v: f"-{abs(v):,.2f}" if v > 0 else (f"+{abs(v):,.2f}" if v < 0 else "0,00"),
-                    "Vl Total Diferença":lambda v: f"R$ -{abs(v):,.2f}" if v > 0 else (f"R$ +{abs(v):,.2f}" if v < 0 else "R$ 0,00"),
-                }, na_rep="—"),
-                use_container_width=True, hide_index=True)
+            col_cfg = {
+                "Codigo":         st.column_config.TextColumn("Código", disabled=True, width="small"),
+                "Descricao":      st.column_config.TextColumn("Descrição", disabled=True, width="large"),
+                "Documento":      st.column_config.TextColumn("Documento", disabled=True, width="small"),
+                "Qtd WMS":        st.column_config.NumberColumn("Qtd WMS", disabled=True, format="%.2f"),
+                "Qtd ERP":        st.column_config.NumberColumn("Qtd ERP", disabled=True, format="%.2f"),
+                "Divergencia Qtd":st.column_config.NumberColumn("Δ Qtd", disabled=True, format="%.2f"),
+                "Divergencia Vl": st.column_config.NumberColumn("Δ Valor", disabled=True, format="R$ %.2f"),
+                "Justificativa":  st.column_config.SelectboxColumn("Justificativa", options=OPCOES_JUST, required=True, width="medium"),
+            }
 
-            st.markdown("#### Justificativas")
-            st.caption("Preencha a justificativa para cada divergência. Deixe em branco se não houver.")
+            df_result = st.data_editor(
+                df_just_edit,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                column_config=col_cfg,
+                key=f"just_editor_{num_ciclo_conf}_{doc_atual}")
 
-            justs_edit = {}
-            prods_div = df_div["Produto"].astype(str).tolist()
-            desc_map  = dict(zip(df_div["Produto"].astype(str),
-                                 df_div.get("Descrição", pd.Series([""] * len(df_div))).tolist()))
-
-            cols_just = st.columns(2)
-            for i, prod in enumerate(prods_div):
-                col = cols_just[i % 2]
-                desc = str(desc_map.get(prod,""))[:50]
-                with col:
-                    val = col.text_input(
-                        f"**{prod}** — {desc}",
-                        value=justs_salvas.get(prod,""),
-                        key=f"just_{num_ciclo_conf}_{prod}",
-                        placeholder="Justificativa...")
-                    justs_edit[prod] = val
-
-            if st.button("💾 Salvar justificativas", type="primary", key="btn_salvar_just"):
-                db_salvar_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf, justs_edit)
-                st.session_state[f"ic_conf_ok_{num_ciclo_conf}"] = True
-                st.success("✅ Justificativas salvas!")
+            if st.button("💾 Salvar e confirmar conferência", type="primary", key="btn_salvar_just4"):
+                justs_edit = dict(zip(df_result["Codigo"].astype(str), df_result["Justificativa"].astype(str)))
+                # Salva justificativas com o documento conferido
+                db_salvar_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf,
+                                          justs_edit, documento=doc_atual)
+                n_ajuste = sum(1 for v in justs_edit.values() if v == "Ajuste de inventário")
+                st.success(f"✅ Upload {doc_atual} conferido!")
+                if n_ajuste > 0:
+                    st.warning(f"⚠️ **{n_ajuste} produto(s)** com 'Ajuste de inventário' — faça o upload da NF na Etapa 5.")
                 st.rerun()
 
     # ── ETAPA 6 — FECHAR INVENTÁRIO ───────────────────────────────────────

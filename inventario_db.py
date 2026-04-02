@@ -303,22 +303,39 @@ def db_obter_justificativas(engine, empresa, filial, num_ciclo):
         return {}
 
 
-def db_salvar_justificativas(engine, empresa, filial, num_ciclo, justificativas):
-    """justificativas = dict {produto: texto}"""
+def db_salvar_justificativas(engine, empresa, filial, num_ciclo, justificativas, documento=""):
+    """justificativas = dict {produto: texto}. documento = nº do inventário ERP conferido."""
     if engine is None or not justificativas: return
     try:
         with engine.connect() as conn:
             for produto, texto in justificativas.items():
                 conn.execute(text("""
                     INSERT INTO inventario_justificativas
-                        (empresa, filial, num_ciclo, produto, justificativa, atualizado_em)
-                    VALUES (:e,:f,:c,:p,:j,NOW())
+                        (empresa, filial, num_ciclo, produto, justificativa, documento, atualizado_em)
+                    VALUES (:e,:f,:c,:p,:j,:doc,NOW())
                     ON CONFLICT (empresa,filial,num_ciclo,produto)
-                    DO UPDATE SET justificativa=EXCLUDED.justificativa, atualizado_em=NOW()
-                """), {"e":empresa,"f":filial,"c":num_ciclo,"p":str(produto),"j":texto})
+                    DO UPDATE SET justificativa=EXCLUDED.justificativa,
+                                  documento=EXCLUDED.documento, atualizado_em=NOW()
+                """), {"e":empresa,"f":filial,"c":num_ciclo,"p":str(produto),"j":texto,"doc":documento})
             conn.commit()
     except Exception as ex:
         logger.warning("db_salvar_justificativas: %s", ex)
+
+
+def db_obter_documentos_conferidos(engine, empresa, filial, num_ciclo):
+    """Retorna set de documentos ERP já conferidos na etapa 4."""
+    if engine is None: return set()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT DISTINCT documento FROM inventario_justificativas
+                WHERE empresa=:e AND filial=:f AND num_ciclo=:c
+                AND documento != '' AND documento IS NOT NULL
+            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchall()
+        return {r[0] for r in rows}
+    except Exception as ex:
+        logger.warning("db_obter_documentos_conferidos: %s", ex)
+        return set()
 
 
 # ── Upload ERP Protheus ───────────────────────────────────────────────────────
