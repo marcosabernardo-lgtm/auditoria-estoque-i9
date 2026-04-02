@@ -700,11 +700,8 @@ def render(df_jlle, df_outras, formatar_br):
     # Cache no session_state — só recarrega do banco quando empresa/filial muda ou ic_force_reload
     if empresa_sel and filial_sel:
         _cache_key = f"ic_cache_{empresa_sel}_{filial_sel}"
-        _deve_recarregar = (
-            _cache_key not in st.session_state or
-            st.session_state.get("ic_force_reload", False)
-        )
-        st.session_state.pop("ic_force_reload", None)  # limpa APÓS verificar, não antes
+        _force = st.session_state.pop("ic_force_reload", False)
+        _deve_recarregar = (_cache_key not in st.session_state) or _force
         if _deve_recarregar:
             _tudo = db_carregar_tudo(engine_db, empresa_sel, filial_sel)
             st.session_state[f"{_cache_key}_contados"]    = _tudo["contados"]
@@ -958,8 +955,11 @@ def render(df_jlle, df_outras, formatar_br):
                 "uploads":        _uploads,
                 "status":         "Em andamento",
             })
+            # Limpa todo o cache para forçar releitura do banco
+            for _k in list(st.session_state.keys()):
+                if _k.startswith("ic_cache_"):
+                    del st.session_state[_k]
             st.session_state["ic_force_reload"] = True
-            st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
             st.success(f"✅ Lista gerada — {len(df_exib)} produtos. Ciclo: **{num_ciclo}**")
             st.rerun()
 
