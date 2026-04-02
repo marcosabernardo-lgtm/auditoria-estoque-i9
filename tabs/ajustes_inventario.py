@@ -163,7 +163,7 @@ def render(empresa_sel, filial_sel, formatar_br):
         st.caption("Faça o upload do PDF da DANFE. Os dados serão extraídos automaticamente.")
 
         arq_pdf = st.file_uploader("📎 Selecione o PDF da NF (DANFE)",
-                                    type=["pdf"], key="aj_pdf_upload")
+                                    type=["pdf"], key=f"aj_pdf_upload_{st.session_state.get('aj_upload_count',0)}")
 
         if arq_pdf:
             pdf_bytes = arq_pdf.read()
@@ -212,6 +212,7 @@ def render(empresa_sel, filial_sel, formatar_br):
                                 nf_dados["num_nf"], data_nf_iso, nf_dados["natureza"],
                                 justificativa.strip(), nf_dados["itens"], operador)
                             if ok:
+                                st.session_state["aj_upload_count"] = st.session_state.get("aj_upload_count", 0) + 1
                                 st.success(f"✅ NF {nf_dados['num_nf']} salva com sucesso!")
                                 st.rerun()
         else:
