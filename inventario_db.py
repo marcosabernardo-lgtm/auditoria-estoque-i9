@@ -423,3 +423,102 @@ def db_salvar_nf_ajuste(engine, empresa, filial, num_ciclo, num_nf, data_nf, nat
             conn.commit()
     except Exception as ex:
         logger.warning("db_salvar_nf_ajuste: %s", ex)
+
+
+# ── Carga consolidada (uma conexão só) ───────────────────────────────────────
+
+def db_carregar_tudo(engine, empresa, filial):
+    """Carrega todos os dados do ciclo ativo em uma única conexão."""
+    if engine is None:
+        return {"contados": {}, "ciclos": [], "ciclo_ativo": None,
+                "erp_uploads": [], "nf_ajustes": [], "docs_conf": set(), "justs": {}}
+    try:
+        with engine.connect() as conn:
+            # 1. Contados
+            rows_cont = conn.execute(text("""
+                SELECT produto, ultima_contagem FROM inventario_contados
+                WHERE empresa=:e AND filial=:f
+            """), {"e":empresa,"f":filial}).fetchall()
+            contados = {r[0]: str(r[1]) for r in rows_cont}
+
+            # 2. Ciclos fechados
+            rows_ciclos = conn.execute(text("""
+                SELECT num_ciclo, data_geracao, label, qtd_lista, produtos_lista,
+                       uploads_json, status, relatorio_json, produtos_contados, erp_json
+                FROM inventario_ciclos
+                WHERE empresa=:e AND filial=:f
+                ORDER BY num_ciclo ASC
+            """), {"e":empresa,"f":filial}).fetchall()
+            ciclos = []
+            for r in rows_ciclos:
+                try: pl = json.loads(r[4] or "[]")
+                except: pl = []
+                try: ups = json.loads(r[5] or "[]")
+                except: ups = []
+                try: pc = json.loads(r[8] or "[]")
+                except: pc = []
+                ciclos.append({
+                    "num_ciclo": r[0], "data_geracao": r[1], "label": r[2],
+                    "qtd_lista": r[3], "produtos_lista": pl, "uploads": ups,
+                    "status": r[6], "relatorio_json": r[7] or "[]",
+                    "produtos_contados": pc, "erp_json": r[9] or "[]",
+                })
+
+            # 3. Ciclo ativo
+            row_ca = conn.execute(text("""
+                SELECT num_ciclo, data_geracao, label, qtd_lista, produtos_lista, uploads_json, status
+                FROM inventario_ciclo_ativo
+                WHERE empresa=:e AND filial=:f LIMIT 1
+            """), {"e":empresa,"f":filial}).fetchone()
+            ciclo_ativo = None
+            num_c = ""
+            if row_ca:
+                try: pl_a = json.loads(row_ca[4] or "[]")
+                except: pl_a = []
+                try: ups_a = json.loads(row_ca[5] or "[]")
+                except: ups_a = []
+                ciclo_ativo = {
+                    "num_ciclo": row_ca[0], "data_geracao": row_ca[1],
+                    "label": row_ca[2], "qtd_lista": row_ca[3],
+                    "produtos_lista": pl_a, "uploads": ups_a, "status": row_ca[6],
+                }
+                num_c = row_ca[0]
+
+            erp_uploads = []
+            nf_ajustes  = []
+            docs_conf   = set()
+            justs       = {}
+
+            if num_c:
+                # 4. ERP uploads
+                rows_erp = conn.execute(text("""
+                    SELECT documento, data_upload, dados_json FROM inventario_erp_upload
+                    WHERE empresa=:e AND filial=:f AND num_ciclo=:c ORDER BY atualizado_em ASC
+                """), {"e":empresa,"f":filial,"c":num_c}).fetchall()
+                erp_uploads = [{"documento": r[0], "data_upload": str(r[1]) if r[1] else "",
+                                 "dados": json.loads(r[2] or "[]")} for r in rows_erp]
+
+                # 5. NF ajustes
+                rows_nf = conn.execute(text("""
+                    SELECT num_nf, data_nf, natureza, dados_json FROM inventario_nf_ajuste
+                    WHERE empresa=:e AND filial=:f AND num_ciclo=:c ORDER BY atualizado_em ASC
+                """), {"e":empresa,"f":filial,"c":num_c}).fetchall()
+                nf_ajustes = [{"num_nf": r[0], "data_nf": str(r[1]) if r[1] else "",
+                                "natureza": r[2], "dados": json.loads(r[3] or "[]")} for r in rows_nf]
+
+                # 6. Documentos conferidos + justificativas
+                rows_j = conn.execute(text("""
+                    SELECT produto, justificativa, documento FROM inventario_justificativas
+                    WHERE empresa=:e AND filial=:f AND num_ciclo=:c
+                """), {"e":empresa,"f":filial,"c":num_c}).fetchall()
+                for rj in rows_j:
+                    justs[rj[0]] = rj[1]
+                    if rj[2]: docs_conf.add(rj[2])
+
+        return {"contados": contados, "ciclos": ciclos, "ciclo_ativo": ciclo_ativo,
+                "erp_uploads": erp_uploads, "nf_ajustes": nf_ajustes,
+                "docs_conf": docs_conf, "justs": justs}
+    except Exception as ex:
+        logger.warning("db_carregar_tudo: %s", ex)
+        return {"contados": {}, "ciclos": [], "ciclo_ativo": None,
+                "erp_uploads": [], "nf_ajustes": [], "docs_conf": set(), "justs": {}}

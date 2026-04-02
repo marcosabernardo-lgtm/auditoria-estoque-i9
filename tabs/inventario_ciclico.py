@@ -18,7 +18,7 @@ try:
         db_obter_justificativas, db_salvar_justificativas,
         db_obter_erp_upload, db_obter_erp_uploads, db_salvar_erp_upload,
         db_obter_nf_ajustes, db_salvar_nf_ajuste,
-        db_obter_documentos_conferidos,
+        db_obter_documentos_conferidos, db_carregar_tudo,
     )
     DB_DISPONIVEL = True
 except ImportError:
@@ -705,15 +705,14 @@ def render(df_jlle, df_outras, formatar_br):
             st.session_state.pop("ic_force_reload", False)
         )
         if _deve_recarregar:
-            st.session_state[f"{_cache_key}_contados"]    = db_obter_contados(engine_db, empresa_sel, filial_sel)
-            st.session_state[f"{_cache_key}_ciclos"]      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
-            _ca = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
-            st.session_state[f"{_cache_key}_ciclo_ativo"] = _ca
-            _num_c = _ca.get("num_ciclo","") if _ca else ""
-            st.session_state[f"{_cache_key}_erp_uploads"] = db_obter_erp_uploads(engine_db, empresa_sel, filial_sel, _num_c) if _num_c else []
-            st.session_state[f"{_cache_key}_nf_ajustes"]  = db_obter_nf_ajustes(engine_db, empresa_sel, filial_sel, _num_c) if _num_c else []
-            st.session_state[f"{_cache_key}_docs_conf"]   = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, _num_c) if _num_c else set()
-            st.session_state[f"{_cache_key}_justs"]       = db_obter_justificativas(engine_db, empresa_sel, filial_sel, _num_c) if _num_c else {}
+            _tudo = db_carregar_tudo(engine_db, empresa_sel, filial_sel)
+            st.session_state[f"{_cache_key}_contados"]    = _tudo["contados"]
+            st.session_state[f"{_cache_key}_ciclos"]      = _tudo["ciclos"]
+            st.session_state[f"{_cache_key}_ciclo_ativo"] = _tudo["ciclo_ativo"]
+            st.session_state[f"{_cache_key}_erp_uploads"] = _tudo["erp_uploads"]
+            st.session_state[f"{_cache_key}_nf_ajustes"]  = _tudo["nf_ajustes"]
+            st.session_state[f"{_cache_key}_docs_conf"]   = _tudo["docs_conf"]
+            st.session_state[f"{_cache_key}_justs"]       = _tudo["justs"]
             st.session_state[_cache_key] = True
         contados    = st.session_state.get(f"{_cache_key}_contados", {})
         ciclos      = st.session_state.get(f"{_cache_key}_ciclos", [])
