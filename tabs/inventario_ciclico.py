@@ -797,6 +797,11 @@ def render(df_jlle, df_outras, formatar_br):
             _dados_pend = _uploads_pend[-1].get("dados",[])
             _tem_div_atual = any(float(str(r.get("Divergencia Qtd",0)).replace(",",".") or 0) != 0 for r in _dados_pend)
 
+    # Se o usuário está na etapa 2 adicionando upload, cards 3 e 4 ficam pendentes
+    if etapa_nav == 2:
+        _conf_concluida = False
+        _nf_concluida   = False
+
     c1,c2,c3,c4,c5,c6 = st.columns(6)
     b1 = _card(c1,1,"Gerar lista",  "Define o ciclo e a lista",
                ativo=(etapa_nav==1), concluido=(ciclo_ativo is not None), chave="ic_n1")
@@ -1506,6 +1511,8 @@ def render(df_jlle, df_outras, formatar_br):
                     if st.button("📋 Voltar ao Upload ERP", key="ic_voltar_upload",
                                  use_container_width=True):
                         st.session_state["ic_etapa_nav"] = 2
+                        st.session_state["ic_force_reload"] = True
+                        st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
                         st.rerun()
 
                 # Confirmação após clique em Finalizar assim mesmo
