@@ -1,4 +1,5 @@
 import streamlit as st
+from collections import defaultdict
 import pandas as pd
 import numpy as np
 import io
@@ -425,7 +426,6 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
             _erp_data = []
 
         # Agrupa por documento
-        from collections import defaultdict
         _docs_map = defaultdict(list)
         for r in _erp_data:
             doc = str(r.get("Documento","—")).strip()
@@ -1784,7 +1784,7 @@ def render(df_jlle, df_outras, formatar_br):
             if not df_c.empty:
                 try:
                     pdf_b = gerar_pdf_kpmg_consolidado([c], {num_c: df_c}, empresa_sel, filial_sel)
-                    if pdf_b:
+                    if pdf_b and isinstance(pdf_b, bytes):
                         cpdf.download_button(
                             "📄",
                             data=pdf_b,
@@ -1793,9 +1793,9 @@ def render(df_jlle, df_outras, formatar_br):
                             key=f"dl5_{num_c}",
                             help=f"Baixar PDF — {num_c}")
                     else:
-                        cpdf.caption("⚠️ retornou None")
+                        cpdf.caption("⚠️ PDF vazio")
                 except Exception as _epdf:
-                    cpdf.caption(f"⚠️ {str(_epdf)[:50]}")
+                    cpdf.caption(f"⚠️ {str(_epdf)[:80]}")
             else:
                 cpdf.caption("sem dados")
 
