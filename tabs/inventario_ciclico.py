@@ -677,15 +677,30 @@ def render(df_jlle, df_outras, formatar_br):
     nf_ajustes_ativo = db_obter_nf_ajustes(engine_db, empresa_sel, filial_sel,
                    _num_ciclo_ativo) if empresa_sel and filial_sel and ciclo_ativo else []
 
-    # Conferência concluída: há justificativas salvas no banco
+    # Conferência concluída: todos os uploads ERP foram conferidos
     _conf_concluida = False
-    if _num_ciclo_ativo and empresa_sel and filial_sel:
+    _nf_concluida   = False
+    if _num_ciclo_ativo and empresa_sel and filial_sel and erp_uploads_ativo:
         try:
-            _justs_check = db_obter_justificativas(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo)
-            if _justs_check:
-                _conf_concluida = True
+            _docs_conf = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo)
+            _docs_erp  = {u.get("documento","") for u in erp_uploads_ativo}
+            # Conferência concluída se todos os docs ERP foram conferidos
+            _conf_concluida = bool(_docs_erp and _docs_erp.issubset(_docs_conf))
+
+            # NF concluída se:
+            # 1. Não há nenhum produto com "Ajuste de inventário", OU
+            # 2. Há NF salva
+            if _conf_concluida:
+                _justs = db_obter_justificativas(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo)
+                _n_ajuste = sum(1 for p,j in _justs.items()
+                               if j == "Ajuste de inventário" and not p.startswith("_"))
+                _nf_concluida = (_n_ajuste == 0) or (len(nf_ajustes_ativo) > 0)
         except:
             pass
+    elif _num_ciclo_ativo and empresa_sel and filial_sel and not erp_uploads_ativo:
+        # Sem uploads ERP — etapas 4 e 5 não aplicáveis ainda
+        _conf_concluida = False
+        _nf_concluida   = False
 
     etapa_nav = st.session_state.get("ic_etapa_nav", 1)
 
@@ -701,7 +716,7 @@ def render(df_jlle, df_outras, formatar_br):
     b4 = _card(c4,4,"Conferência",   "Divergências e justificativas",
                ativo=(etapa_nav==4), concluido=_conf_concluida, chave="ic_n4")
     b5 = _card(c5,5,"NF de Ajuste",  "Upload da NF de baixa/perda",
-               ativo=(etapa_nav==5), concluido=(len(nf_ajustes_ativo)>0), chave="ic_n5")
+               ativo=(etapa_nav==5), concluido=_nf_concluida, chave="ic_n5")
     b6 = _card(c6,6,"Fechar",        "Relatório final e fechamento",
                ativo=(etapa_nav==6), concluido=(len(ciclos)>0), chave="ic_n6")
     b7 = _card(c7,7,"Histórico",     "PDFs dos ciclos fechados",
