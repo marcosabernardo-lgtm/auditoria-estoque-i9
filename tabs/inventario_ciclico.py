@@ -416,35 +416,64 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     for i, c in enumerate(ciclos_sel, 1):
         num_c = c.get("num_ciclo","")
         df_c  = dfs_rel.get(num_c, pd.DataFrame())
-        n_sku = len(df_c) if not df_c.empty else c.get("qtd_contados", len(c.get("produtos_contados",[])))
-        # Múltiplos Nº Inv. — pega do erp_json se disponível
+
+        # Pega uploads ERP do ciclo via erp_json
         _erp_j = c.get("erp_json","[]")
         try:
             _erp_data = json.loads(_erp_j) if _erp_j and _erp_j != "[]" else []
-            _docs = list(dict.fromkeys([str(r.get("Documento","")).strip() for r in _erp_data if r.get("Documento","")]))
-            num_inv_str = ", ".join(_docs) if _docs else c.get("num_inv","—")
         except:
-            num_inv_str = c.get("num_inv","—")
-        # SKUs divergentes
-        n_div = 0
-        for col_div in ["Diferença Invent","Divergencia Qtd","Divergência"]:
-            if not df_c.empty and col_div in df_c.columns:
-                n_div = int((pd.to_numeric(df_c[col_div], errors="coerce").fillna(0) != 0).sum())
-                break
-        # Acuracidade calculada
-        acur_c = acur_por_ciclo.get(num_c)
-        acur_str = f"{acur_c:.1f}%" if acur_c is not None else "—"
-        rows_ciclos.append([
-            Paragraph(str(i),         s_cell_c),
-            Paragraph(num_c,          s_cell),
-            Paragraph(c.get("data","—"), s_cell_c),
-            Paragraph(c.get("responsavel","—"), s_cell),
-            Paragraph(num_inv_str,    s_cell_c),
-            Paragraph(str(n_sku),     s_cell_c),
-            Paragraph(str(n_div),     s_cell_c),
-            Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_cell_c),
-            Paragraph(acur_str,       s_cell_c),
-        ])
+            _erp_data = []
+
+        # Agrupa por documento
+        from collections import defaultdict
+        _docs_map = defaultdict(list)
+        for r in _erp_data:
+            doc = str(r.get("Documento","—")).strip()
+            _docs_map[doc].append(r)
+
+        if not _docs_map:
+            # Fallback: uma linha só com totais do ciclo
+            n_sku = len(df_c) if not df_c.empty else c.get("qtd_contados", len(c.get("produtos_contados",[])))
+            acur_c = acur_por_ciclo.get(num_c)
+            acur_str = f"{acur_c:.1f}%" if acur_c is not None else "—"
+            rows_ciclos.append([
+                Paragraph(str(i),         s_cell_c),
+                Paragraph(num_c,          s_cell),
+                Paragraph(c.get("data","—"), s_cell_c),
+                Paragraph(c.get("responsavel","—"), s_cell),
+                Paragraph("—",            s_cell_c),
+                Paragraph(str(n_sku),     s_cell_c),
+                Paragraph("—",            s_cell_c),
+                Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_cell_c),
+                Paragraph(acur_str,       s_cell_c),
+            ])
+        else:
+            # Uma linha por documento/upload
+            docs_list = list(_docs_map.keys())
+            n_docs = len(docs_list)
+            for j, doc in enumerate(docs_list):
+                itens_doc = _docs_map[doc]
+                n_sku_doc = len(set(str(r.get("Codigo","")).zfill(6) for r in itens_doc))
+                # SKUs divergentes neste documento
+                n_div_doc = sum(1 for r in itens_doc
+                                if float(str(r.get("Divergencia Qtd",0)).replace(",",".") or 0) != 0)
+                # Acuracidade deste documento
+                acur_doc = f"{(n_sku_doc-n_div_doc)/n_sku_doc*100:.1f}%" if n_sku_doc > 0 else "—"
+                # Cobertura acumulada até este doc
+                cobertura_doc = f"{c.get('cobertura_pct',0):.1f}%" if j == n_docs-1 else "—"
+
+                rows_ciclos.append([
+                    Paragraph(str(i) if j == 0 else "", s_cell_c),
+                    Paragraph(num_c  if j == 0 else "", s_cell),
+                    Paragraph(c.get("data","—"),        s_cell_c),
+                    Paragraph(c.get("responsavel","—") if j == 0 else "", s_cell),
+                    Paragraph(doc,                      s_cell_c),
+                    Paragraph(str(n_sku_doc),           s_cell_c),
+                    Paragraph(str(n_div_doc),           s_cell_c),
+                    Paragraph(cobertura_doc,            s_cell_c),
+                    Paragraph(acur_doc,                 s_cell_c),
+                ])
+
     tbl_ciclos = Table(rows_ciclos,
                        colWidths=[0.7*cm, 4.5*cm, 2.2*cm, 3.5*cm, 2.5*cm, 1.3*cm, 1.3*cm, 1.8*cm, 2*cm],
                        repeatRows=1)
