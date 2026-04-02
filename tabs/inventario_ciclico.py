@@ -1527,12 +1527,22 @@ def render(df_jlle, df_outras, formatar_br):
                         db_marcar_contados(engine_db, empresa_sel, filial_sel, list(todos),
                                            data=data_iso, num_ciclo=ciclo_ativo.get("num_ciclo",""))
                         db_fechar_ciclo_ativo(engine_db, empresa_sel, filial_sel)
-                        st.session_state["ic_fechado_msg"]  = True
-                        st.session_state["ic_etapa_nav"]    = 7
-                        st.session_state["ic_force_reload"] = True
-                        # Limpa TODO o cache do inventário para forçar releitura
+                        # Injeta ciclo fechado no cache sem recarregar do banco
+                        _ck_f = f"ic_cache_{empresa_sel}_{filial_sel}"
+                        _ciclos_upd = list(st.session_state.get(f"{_ck_f}_ciclos", []))
+                        _ciclos_upd.append(cf)
                         for _k in [k for k in st.session_state if k.startswith("ic_cache_") or k.startswith("_pdf5_")]:
                             del st.session_state[_k]
+                        st.session_state[f"{_ck_f}_ciclos"]      = _ciclos_upd
+                        st.session_state[f"{_ck_f}_ciclo_ativo"] = None
+                        st.session_state[f"{_ck_f}_erp_uploads"] = []
+                        st.session_state[f"{_ck_f}_nf_ajustes"]  = []
+                        st.session_state[f"{_ck_f}_docs_conf"]   = set()
+                        st.session_state[f"{_ck_f}_justs"]       = {}
+                        st.session_state[f"{_ck_f}_contados"]    = contados
+                        st.session_state[_ck_f] = True
+                        st.session_state["ic_fechado_msg"] = True
+                        st.session_state["ic_etapa_nav"]   = 6
                         st.rerun()
             else:
                 # SKUs pendentes — oferece escolha
@@ -1588,11 +1598,21 @@ def render(df_jlle, df_outras, formatar_br):
                                                data=data_iso, num_ciclo=ciclo_ativo.get("num_ciclo",""))
                             db_fechar_ciclo_ativo(engine_db, empresa_sel, filial_sel)
                             st.session_state.pop("ic_confirmar_parcial", None)
-                            st.session_state["ic_fechado_msg"]  = True
-                            st.session_state["ic_etapa_nav"]    = 6
-                            st.session_state["ic_force_reload"] = True
+                            _ck_fp = f"ic_cache_{empresa_sel}_{filial_sel}"
+                            _ciclos_upd2 = list(st.session_state.get(f"{_ck_fp}_ciclos", []))
+                            _ciclos_upd2.append(cf)
                             for _k in [k for k in st.session_state if k.startswith("ic_cache_") or k.startswith("_pdf5_")]:
                                 del st.session_state[_k]
+                            st.session_state[f"{_ck_fp}_ciclos"]      = _ciclos_upd2
+                            st.session_state[f"{_ck_fp}_ciclo_ativo"] = None
+                            st.session_state[f"{_ck_fp}_erp_uploads"] = []
+                            st.session_state[f"{_ck_fp}_nf_ajustes"]  = []
+                            st.session_state[f"{_ck_fp}_docs_conf"]   = set()
+                            st.session_state[f"{_ck_fp}_justs"]       = {}
+                            st.session_state[f"{_ck_fp}_contados"]    = contados
+                            st.session_state[_ck_fp] = True
+                            st.session_state["ic_fechado_msg"] = True
+                            st.session_state["ic_etapa_nav"]   = 6
                             st.rerun()
                     with cc2:
                         if st.button("❌ Cancelar", key="ic_fechar_cancel", use_container_width=True):
