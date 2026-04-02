@@ -332,24 +332,30 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         len(dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame()))
         for c in ciclos_sel
     )
-    acur_vals = []
+    # Calcula acuracidade por ciclo: (sem divergência / total) * 100
+    def _calc_acur(df_c):
+        if df_c.empty: return None
+        # Tenta a partir da coluna Diferença Invent ou Divergencia Qtd
+        for col_div in ["Diferença Invent","Divergencia Qtd","Divergência"]:
+            if col_div in df_c.columns:
+                total = len(df_c)
+                sem_div = int((pd.to_numeric(df_c[col_div], errors="coerce").fillna(0) == 0).sum())
+                if total > 0: return sem_div / total * 100
+        return None
+
+    acur_por_ciclo = {}
     for c in ciclos_sel:
-        a = c.get("acuracidade","")
-        # Tenta do campo direto
-        try:
-            v = float(str(a).replace("%","").replace(",","."))
-            if v > 0: acur_vals.append(v)
-        except: pass
-        # Fallback: calcula a partir do df_rel se disponível
-        if not acur_vals:
-            df_c = dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame())
-            if not df_c.empty and "Acuracidade" in df_c.columns:
-                for av in df_c["Acuracidade"].dropna():
-                    try:
-                        v = float(str(av).replace("%","").replace(",","."))
-                        if v > 0: acur_vals.append(v)
-                    except: pass
-    acur_media = f"{sum(acur_vals)/len(acur_vals):.1f}%" if acur_vals else "N/D"
+        num_c = c.get("num_ciclo","")
+        df_c  = dfs_rel.get(num_c, pd.DataFrame())
+        acur  = _calc_acur(df_c)
+        if acur is None:
+            # fallback: campo gravado
+            try: acur = float(str(c.get("acuracidade","")).replace("%","").replace(",",".")) or None
+            except: acur = None
+        acur_por_ciclo[num_c] = acur
+
+    vals_validos = [v for v in acur_por_ciclo.values() if v is not None]
+    acur_media = f"{sum(vals_validos)/len(vals_validos):.1f}%" if vals_validos else "N/D"
     cobertura_max = max((c.get("cobertura_pct",0) for c in ciclos_sel), default=0)
     n_ciclos = len(ciclos_sel)
 
@@ -405,23 +411,42 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     elems.append(Spacer(1, 0.3*cm))
 
     h_ciclos = [Paragraph(h, s_cellh) for h in
-                ["#","Nº Ciclo","Data Contagem","Responsável","Nº Inv.","SKUs","Cobertura","Acuracidade"]]
+                ["#","Nº Ciclo","Data Contagem","Responsável","Nº Inv.","SKUs","SKUs Div.","Cobertura","Acuracidade"]]
     rows_ciclos = [h_ciclos]
     for i, c in enumerate(ciclos_sel, 1):
-        df_c  = dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame())
+        num_c = c.get("num_ciclo","")
+        df_c  = dfs_rel.get(num_c, pd.DataFrame())
         n_sku = len(df_c) if not df_c.empty else c.get("qtd_contados", len(c.get("produtos_contados",[])))
+        # Múltiplos Nº Inv. — pega do erp_json se disponível
+        _erp_j = c.get("erp_json","[]")
+        try:
+            _erp_data = json.loads(_erp_j) if _erp_j and _erp_j != "[]" else []
+            _docs = list(dict.fromkeys([str(r.get("Documento","")).strip() for r in _erp_data if r.get("Documento","")]))
+            num_inv_str = ", ".join(_docs) if _docs else c.get("num_inv","—")
+        except:
+            num_inv_str = c.get("num_inv","—")
+        # SKUs divergentes
+        n_div = 0
+        for col_div in ["Diferença Invent","Divergencia Qtd","Divergência"]:
+            if not df_c.empty and col_div in df_c.columns:
+                n_div = int((pd.to_numeric(df_c[col_div], errors="coerce").fillna(0) != 0).sum())
+                break
+        # Acuracidade calculada
+        acur_c = acur_por_ciclo.get(num_c)
+        acur_str = f"{acur_c:.1f}%" if acur_c is not None else "—"
         rows_ciclos.append([
-            Paragraph(str(i),                         s_cell_c),
-            Paragraph(c.get("num_ciclo","—"),         s_cell),
-            Paragraph(c.get("data","—"),              s_cell_c),
-            Paragraph(c.get("responsavel","—"),       s_cell),
-            Paragraph(c.get("num_inv","—"),           s_cell_c),
-            Paragraph(str(n_sku),                     s_cell_c),
+            Paragraph(str(i),         s_cell_c),
+            Paragraph(num_c,          s_cell),
+            Paragraph(c.get("data","—"), s_cell_c),
+            Paragraph(c.get("responsavel","—"), s_cell),
+            Paragraph(num_inv_str,    s_cell_c),
+            Paragraph(str(n_sku),     s_cell_c),
+            Paragraph(str(n_div),     s_cell_c),
             Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_cell_c),
-            Paragraph(str(c.get("acuracidade","—")), s_cell_c),
+            Paragraph(acur_str,       s_cell_c),
         ])
     tbl_ciclos = Table(rows_ciclos,
-                       colWidths=[0.8*cm, 5.5*cm, 2.5*cm, 4*cm, 1.5*cm, 1.5*cm, 2*cm, 2.2*cm],
+                       colWidths=[0.7*cm, 4.5*cm, 2.2*cm, 3.5*cm, 2.5*cm, 1.3*cm, 1.3*cm, 1.8*cm, 2*cm],
                        repeatRows=1)
     tbl_ciclos.setStyle(TableStyle([
         ("BACKGROUND",     (0,0), (-1,0),  C_TEAL),
@@ -454,17 +479,35 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         elems.append(HRFlowable(width="100%", thickness=1, color=C_ORANGE))
         elems.append(Spacer(1, 0.3*cm))
 
+        # Calcula SKUs divergentes e acuracidade para este ciclo
+        n_div_c = 0
+        for col_div in ["Diferença Invent","Divergencia Qtd","Divergência"]:
+            if not df_rel.empty and col_div in df_rel.columns:
+                n_div_c = int((pd.to_numeric(df_rel[col_div], errors="coerce").fillna(0) != 0).sum())
+                break
+        acur_c_val = acur_por_ciclo.get(num_c)
+        acur_c_str = f"{acur_c_val:.1f}%" if acur_c_val is not None else "—"
+
+        # Nº Inventários (múltiplos)
+        _erp_j2 = c.get("erp_json","[]")
+        try:
+            _erp_d2 = json.loads(_erp_j2) if _erp_j2 and _erp_j2 != "[]" else []
+            _docs2 = list(dict.fromkeys([str(r.get("Documento","")).strip() for r in _erp_d2 if r.get("Documento","")]))
+            num_inv_det = ", ".join(_docs2) if _docs2 else c.get("num_inv","—")
+        except:
+            num_inv_det = c.get("num_inv","—")
+
         # Metadados do ciclo em grid 3x2
         meta_data = [
             [Paragraph("Data da contagem", s_det_label), Paragraph(c.get("data","—"), s_det_val),
-             Paragraph("Nº Inventário",    s_det_label), Paragraph(c.get("num_inv","—"), s_det_val),
+             Paragraph("Nº Inventário",    s_det_label), Paragraph(num_inv_det, s_det_val),
              Paragraph("Status",           s_det_label), Paragraph(c.get("status","—"), s_det_val)],
             [Paragraph("Responsável",      s_det_label), Paragraph(c.get("responsavel","—"), s_det_val),
-             Paragraph("Acuracidade",      s_det_label), Paragraph(str(c.get("acuracidade","—")), s_det_val),
+             Paragraph("Acuracidade",      s_det_label), Paragraph(acur_c_str, s_det_val),
              Paragraph("SKUs contados",    s_det_label), Paragraph(str(n_sku), s_det_val)],
             [Paragraph("SKUs na lista",    s_det_label), Paragraph(str(c.get("qtd_lista","—")), s_det_val),
-             Paragraph("Cobertura",        s_det_label), Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_det_val),
-             Paragraph("", s_det_label), Paragraph("", s_det_val)],
+             Paragraph("SKUs divergentes", s_det_label), Paragraph(str(n_div_c), s_det_val),
+             Paragraph("Cobertura",        s_det_label), Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_det_val)],
         ]
         tbl_meta = Table(meta_data, colWidths=[3*cm, 4.5*cm, 2.5*cm, 3*cm, 2.5*cm, 3*cm])
         tbl_meta.setStyle(TableStyle([
@@ -480,9 +523,12 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         # Tabela de produtos contados com dados do inventário
         if not df_rel.empty:
             elems.append(Paragraph(f"Produtos inventariados ({n_sku})", sty("pi", fontSize=9, textColor=C_TEAL, fontName="Helvetica-Bold", spaceBefore=4, spaceAfter=4)))
-            headers  = ["Código","Descrição","Saldo ERP","Saldo WMS","Inventariado","Diferença","Acuracidade","Vl Total ERP","Vl Total Dif."]
-            col_keys = ["Produto","Descrição","Saldo ERP (Total)","Saldo WMS","Invent WMS","Diferença Invent","Acuracidade","Vl Total ERP","Vl Total Diferença"]
-            col_w    = [1.8*cm, 6.0*cm, 1.8*cm, 1.8*cm, 1.8*cm, 1.8*cm, 2.0*cm, 3.2*cm, 3.2*cm]
+            headers  = ["Código","Descrição","Saldo ERP","Saldo WMS","Inventariado","Diferença","Vl Total ERP","Vl Total Dif.","Justificativa","NF Ajuste"]
+            col_keys = ["Produto","Descrição","Saldo ERP (Total)","Saldo WMS","Invent WMS","Diferença Invent","Vl Total ERP","Vl Total Diferença","Justificativa","NF Ajuste"]
+            col_w    = [1.6*cm, 5.0*cm, 1.6*cm, 1.6*cm, 1.6*cm, 1.6*cm, 2.8*cm, 2.8*cm, 3.0*cm, 1.8*cm]
+            # Carrega justificativas e NFs para este ciclo
+            _justs_pdf = c.get("_justs_pdf", {})
+            _nfs_pdf   = c.get("_nfs_pdf", {})
 
             tbl_data = [[Paragraph(h, s_cellh) for h in headers]]
             for _, row in df_rel.iterrows():
@@ -514,6 +560,14 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
                         # Garante zeros à esquerda para código do produto
                         if k == "Produto":
                             r.append(Paragraph(str(v).zfill(6), s_cell))
+                        elif k == "Justificativa":
+                            cod = str(row.get("Produto","")).zfill(6)
+                            just = _justs_pdf.get(cod, "—")
+                            r.append(Paragraph(str(just)[:40], s_cell))
+                        elif k == "NF Ajuste":
+                            cod = str(row.get("Produto","")).zfill(6)
+                            nf  = _nfs_pdf.get(cod, "—")
+                            r.append(Paragraph(str(nf), s_cell_c))
                         else:
                             r.append(Paragraph(str(v)[:55], s_cell))
                 tbl_data.append(r)
@@ -1630,6 +1684,30 @@ def render(df_jlle, df_outras, formatar_br):
 
             dfs_rel_todos[num_c] = df_c
 
+        # Monta mapa de justificativas e NFs por ciclo para o PDF
+        _justs_por_ciclo = {}
+        _nfs_por_ciclo   = {}
+        for c in ciclos:
+            num_c = c.get("num_ciclo","")
+            _justs_por_ciclo[num_c] = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_c)
+            _nfs_raw = db_obter_nf_ajustes(engine_db, empresa_sel, filial_sel, num_c)
+            # mapa {codigo: num_nf}
+            _nf_map_c = {}
+            for nf in _nfs_raw:
+                for item in nf.get("dados",[]):
+                    cod = str(item.get("Codigo","")).zfill(6)
+                    _nf_map_c[cod] = nf.get("num_nf","—")
+            _nfs_por_ciclo[num_c] = _nf_map_c
+
+        # Injeta justificativas e NFs nos ciclos para o PDF
+        ciclos_com_extra = []
+        for c in ciclos:
+            num_c = c.get("num_ciclo","")
+            c_ext = dict(c)
+            c_ext["_justs_pdf"] = _justs_por_ciclo.get(num_c, {})
+            c_ext["_nfs_pdf"]   = _nfs_por_ciclo.get(num_c, {})
+            ciclos_com_extra.append(c_ext)
+
         # Tabela com checkboxes inline
         sel_ciclos = []
         col_ck, col_ciclo, col_data, col_resp, col_acur, col_sku, col_cob, col_status, col_pdf = st.columns(
@@ -1645,10 +1723,19 @@ def render(df_jlle, df_outras, formatar_br):
         col_pdf.markdown("**PDF**")
         st.markdown('<hr style="margin:4px 0;border-color:#EC6E21;">', unsafe_allow_html=True)
 
-        for c in ciclos:
+        for c in ciclos_com_extra:
             num_c = c.get("num_ciclo","—")
             df_c  = dfs_rel_todos.get(num_c, pd.DataFrame())
             n_sku = len(df_c) if not df_c.empty else c.get("qtd_contados", len(c.get("produtos_contados",[])))
+
+            # Acuracidade calculada
+            _acur_calc = None
+            for col_div in ["Diferença Invent","Divergencia Qtd","Divergência"]:
+                if not df_c.empty and col_div in df_c.columns:
+                    total_c = len(df_c)
+                    sem_div_c = int((pd.to_numeric(df_c[col_div], errors="coerce").fillna(0) == 0).sum())
+                    _acur_calc = f"{sem_div_c/total_c*100:.1f}%" if total_c > 0 else "—"
+                    break
 
             ck, cc, cd, cr, ca, cs, ccob, cst, cpdf = st.columns(
                 [0.5, 2.5, 1.5, 2.5, 1.2, 1, 1.2, 1.2, 1.5])
@@ -1656,7 +1743,7 @@ def render(df_jlle, df_outras, formatar_br):
             cc.caption(num_c)
             cd.caption(c.get("data","—"))
             cr.caption(c.get("responsavel","—"))
-            ca.caption(str(c.get("acuracidade","—")))
+            ca.caption(_acur_calc or str(c.get("acuracidade","—")))
             cs.caption(str(n_sku))
             ccob.caption(f"{c.get('cobertura_pct',0):.1f}%")
             cst.caption(c.get("status","—"))
