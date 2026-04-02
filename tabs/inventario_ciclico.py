@@ -1107,8 +1107,16 @@ def render(df_jlle, df_outras, formatar_br):
                             WHERE empresa=:e AND filial=:f
                         """), {"v":json.dumps(ups_at),"e":empresa_sel,"f":filial_sel})
                         conn.commit()
-                    st.session_state["ic_force_reload"] = True
-                    st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
+                    # Atualiza cache local sem ir ao banco
+                    _ck2 = f"ic_cache_{empresa_sel}_{filial_sel}"
+                    _ciclo_upd = dict(ciclo_ativo) if ciclo_ativo else {}
+                    _ciclo_upd["uploads"] = ups_at
+                    st.session_state[f"{_ck2}_ciclo_ativo"] = _ciclo_upd
+                    _erp_upd = list(st.session_state.get(f"{_ck2}_erp_uploads", []))
+                    _erp_upd.append({"documento": documento, "data_upload": date.today().isoformat(),
+                                     "dados": df_erp[cols_prev].to_dict("records")})
+                    st.session_state[f"{_ck2}_erp_uploads"] = _erp_upd
+                    st.session_state[_ck2] = True
                     if _n_div == 0:
                         st.success(f"✅ Upload {documento} adicionado — **sem divergências**. Você pode adicionar um novo upload ou avançar para **Fechar**.")
                     else:

@@ -219,13 +219,14 @@ def db_salvar_ciclo_ativo(engine, empresa, filial, ciclo):
         with engine.connect() as conn:
             conn.execute(text("""
                 INSERT INTO inventario_ciclo_ativo
-                    (empresa,filial,num_ciclo,data_geracao,qtd_lista,
+                    (empresa,filial,num_ciclo,data_geracao,label,qtd_lista,
                      produtos_lista,uploads_json,status,atualizado_em)
-                VALUES (:e,:f,:num_ciclo,:data_geracao,:qtd_lista,
+                VALUES (:e,:f,:num_ciclo,:data_geracao,:label,:qtd_lista,
                         :produtos_lista,:uploads_json,:status,NOW())
                 ON CONFLICT (empresa,filial) DO UPDATE SET
                     num_ciclo=EXCLUDED.num_ciclo,
                     data_geracao=EXCLUDED.data_geracao,
+                    label=EXCLUDED.label,
                     qtd_lista=EXCLUDED.qtd_lista,
                     produtos_lista=EXCLUDED.produtos_lista,
                     uploads_json=EXCLUDED.uploads_json,
@@ -235,6 +236,7 @@ def db_salvar_ciclo_ativo(engine, empresa, filial, ciclo):
                 "e":empresa,"f":filial,
                 "num_ciclo":     ciclo.get("num_ciclo",""),
                 "data_geracao":  ciclo.get("data_geracao",""),
+                "label":         ciclo.get("label",""),
                 "qtd_lista":     ciclo.get("qtd_lista",0),
                 "produtos_lista":json.dumps(ciclo.get("produtos_lista",[])),
                 "uploads_json":  json.dumps(ciclo.get("uploads",[])),
