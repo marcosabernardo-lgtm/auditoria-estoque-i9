@@ -955,12 +955,12 @@ def render(df_jlle, df_outras, formatar_br):
                 "uploads":        _uploads,
                 "status":         "Em andamento",
             })
-            # Limpa todo o cache para forçar releitura do banco
+            # Limpa todo o cache e navega para etapa 2
             for _k in list(st.session_state.keys()):
                 if _k.startswith("ic_cache_"):
                     del st.session_state[_k]
-            st.session_state["ic_force_reload"] = True
-            st.success(f"✅ Lista gerada — {len(df_exib)} produtos. Ciclo: **{num_ciclo}**")
+            st.session_state.pop("ic_force_reload", None)
+            st.session_state["ic_etapa_nav"] = 2
             st.rerun()
 
     # ── ETAPA 2 — UPLOAD ERP (PROTHEUS) ──────────────────────────────────
