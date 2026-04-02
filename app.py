@@ -148,8 +148,9 @@ with st.sidebar:
         st.markdown("---")
         st.caption(f"🏢 **{st.session_state['_app_empresa']}**")
         st.caption(f"📍 {st.session_state.get('_app_filial', '—')}")
+        st.caption(f"👤 {st.session_state.get('_app_operador', '—')}")
         if st.button("🔄 Trocar empresa/filial", use_container_width=True):
-            for k in ["_app_empresa", "_app_filial", "_data_auditoria"]:
+            for k in ["_app_empresa", "_app_filial", "_app_operador", "_data_auditoria"]:
                 st.session_state.pop(k, None)
             st.rerun()
 
@@ -169,11 +170,11 @@ if not st.session_state.get("_app_empresa"):
     with col_c:
         st.markdown(
             """<div style="background:#004550;border:2px solid #EC6E21;border-radius:16px;
-                          padding:36px 40px;margin-top:40px;">
+                          padding:24px 32px;margin-top:40px;margin-bottom:16px;">
                <div style="color:#fff;font-size:1.3rem;font-weight:700;margin-bottom:4px;">
                  Selecionar empresa e filial
                </div>
-               <div style="color:#aac8cc;font-size:0.88rem;margin-bottom:24px;">
+               <div style="color:#aac8cc;font-size:0.88rem;">
                  Escolha o contexto para carregar os dados de auditoria.
                </div>
             </div>""",
@@ -181,17 +182,21 @@ if not st.session_state.get("_app_empresa"):
         )
         emp_input = st.selectbox("🏢 Empresa", empresas, key="sel_empresa")
         filiais_disp = mapa_filiais.get(emp_input, [])
-        # Mostra só o sufixo no dropdown (ex: "Matriz" em vez de "Service - Matriz")
         filiais_labels = [f.split(" - ")[-1] if " - " in f else f for f in filiais_disp]
         fil_label = st.selectbox("📍 Filial", filiais_labels, key="sel_filial")
-        # Recupera o nome completo correspondente ao label selecionado
         fil_input = filiais_disp[filiais_labels.index(fil_label)] if fil_label in filiais_labels else fil_label
-
-        if st.button("▶  Entrar", type="primary", use_container_width=True, key="btn_entrar"):
+        operador_input = st.text_input("👤 Nome do operador", key="sel_operador",
+                                        placeholder="Digite seu nome completo...")
+        _btn_ok = bool(operador_input.strip())
+        if st.button("▶  Entrar", type="primary", use_container_width=True,
+                     key="btn_entrar", disabled=not _btn_ok):
             st.session_state["_app_empresa"]    = emp_input
             st.session_state["_app_filial"]     = fil_input
+            st.session_state["_app_operador"]   = operador_input.strip()
             st.session_state["_data_auditoria"] = _dt.now().strftime("%d/%m/%Y %H:%M")
             st.rerun()
+        if not _btn_ok:
+            st.caption("⚠️ Informe seu nome para continuar.")
 
     st.stop()
 
