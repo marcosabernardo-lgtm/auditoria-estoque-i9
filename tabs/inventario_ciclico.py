@@ -687,18 +687,32 @@ def render(df_jlle, df_outras, formatar_br):
             # Conferência concluída se todos os docs ERP foram conferidos
             _conf_concluida = bool(_docs_erp and _docs_erp.issubset(_docs_conf))
 
-            # NF concluída se:
-            # 1. Não há nenhum produto com "Ajuste de inventário", OU
-            # 2. Há NF salva
+            # Fallback: se há justificativas salvas (mesmo sem documento registrado)
+            if not _conf_concluida:
+                _justs_fb = db_obter_justificativas(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo)
+                _prods_reais = {p for p in _justs_fb if not p.startswith("_")}
+                if _prods_reais:
+                    _conf_concluida = True
+
+            # NF concluída se não há "Ajuste de inventário" ou há NF salva
             if _conf_concluida:
                 _justs = db_obter_justificativas(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo)
                 _n_ajuste = sum(1 for p,j in _justs.items()
                                if j == "Ajuste de inventário" and not p.startswith("_"))
                 _nf_concluida = (_n_ajuste == 0) or (len(nf_ajustes_ativo) > 0)
+            else:
+                # Sem divergências em nenhum upload = ambas concluídas automaticamente
+                _todos_sem_div = all(
+                    not any(float(item.get("Divergencia Qtd", 0)) != 0
+                            for item in u.get("dados", []))
+                    for u in erp_uploads_ativo
+                )
+                if _todos_sem_div:
+                    _conf_concluida = True
+                    _nf_concluida   = True
         except:
             pass
     elif _num_ciclo_ativo and empresa_sel and filial_sel and not erp_uploads_ativo:
-        # Sem uploads ERP — etapas 4 e 5 não aplicáveis ainda
         _conf_concluida = False
         _nf_concluida   = False
 
