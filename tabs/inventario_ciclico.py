@@ -702,8 +702,9 @@ def render(df_jlle, df_outras, formatar_br):
         _cache_key = f"ic_cache_{empresa_sel}_{filial_sel}"
         _deve_recarregar = (
             _cache_key not in st.session_state or
-            st.session_state.pop("ic_force_reload", False)
+            st.session_state.get("ic_force_reload", False)
         )
+        st.session_state.pop("ic_force_reload", None)  # limpa APÓS verificar, não antes
         if _deve_recarregar:
             _tudo = db_carregar_tudo(engine_db, empresa_sel, filial_sel)
             st.session_state[f"{_cache_key}_contados"]    = _tudo["contados"]
