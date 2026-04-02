@@ -554,7 +554,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
             elems.append(Paragraph(f"Produtos inventariados ({n_sku})", sty("pi", fontSize=9, textColor=C_TEAL, fontName="Helvetica-Bold", spaceBefore=4, spaceAfter=4)))
             headers  = ["Código","Descrição","Saldo ERP","Saldo WMS","Inventariado","Diferença","Vl Total ERP","Vl Total Dif.","Justificativa","NF Ajuste"]
             col_keys = ["Produto","Descrição","Saldo ERP (Total)","Saldo WMS","Invent WMS","Diferença Invent","Vl Total ERP","Vl Total Diferença","Justificativa","NF Ajuste"]
-            col_w    = [1.6*cm, 5.0*cm, 1.6*cm, 1.6*cm, 1.6*cm, 1.6*cm, 2.8*cm, 2.8*cm, 3.0*cm, 1.8*cm]
+            col_w    = [1.6*cm, 5.5*cm, 2.0*cm, 2.0*cm, 2.2*cm, 2.0*cm, 3.2*cm, 3.2*cm, 3.5*cm, 2.2*cm]
             # Carrega justificativas e NFs para este ciclo
             _justs_pdf = c.get("_justs_pdf", {})
             _nfs_pdf   = c.get("_nfs_pdf", {})
