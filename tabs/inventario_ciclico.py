@@ -1572,8 +1572,11 @@ def render(df_jlle, df_outras, formatar_br):
                         df_rel   = montar_df_relatorio(_uploads, df_filial)
                         rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
 
-                        # erp_json = dados brutos do Protheus (separado)
-                        erp_json = df_erp_fech.to_json(orient="records", force_ascii=False) if not df_erp_fech.empty else "[]"
+                        # erp_json = dados brutos do Protheus COM documento (todos os registros, sem deduplicar)
+                        df_erp_raw = pd.concat(
+                            [pd.DataFrame(u["dados"]) for u in erp_uploads_ativo if u.get("dados")],
+                            ignore_index=True) if erp_uploads_ativo else pd.DataFrame()
+                        erp_json = df_erp_raw.to_json(orient="records", force_ascii=False) if not df_erp_raw.empty else "[]"
                         cf = {**ciclo_ativo,
                               "uploads":         _uploads,        # preserva lista completa para o PDF no histórico
                               "qtd_uploads":     len(_uploads),   # contador separado para exibição
