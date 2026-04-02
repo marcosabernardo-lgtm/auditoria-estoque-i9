@@ -986,10 +986,26 @@ def render(df_jlle, df_outras, formatar_br):
             st.success(f"✅ **{len(erp_uploads_ativo)} upload(s) ERP** acumulado(s) neste ciclo:")
             for i, u in enumerate(erp_uploads_ativo, 1):
                 n_linhas = len(u.get("dados",[]))
-                with st.expander(f"Etapa {i} — Documento {u.get('documento','—')} · {u.get('data_upload','—')} · {n_linhas} linha(s)"):
+                _n_div_u = sum(1 for r in u.get("dados",[])
+                               if float(str(r.get("Divergencia Qtd",0)).replace(",",".") or 0) != 0)
+                _label_div = f"· ⚠️ {_n_div_u} divergência(s)" if _n_div_u > 0 else "· ✅ Sem divergências"
+                with st.expander(f"Etapa {i} — Documento {u.get('documento','—')} · {u.get('data_upload','—')} · {n_linhas} linha(s) {_label_div}"):
                     df_prev = pd.DataFrame(u["dados"])
                     if not df_prev.empty:
                         st.dataframe(df_prev, use_container_width=True, hide_index=True)
+
+            # Verifica uploads não conferidos
+            _docs_conf_2 = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, num_ciclo_erp)
+            _pend_2 = [u for u in erp_uploads_ativo if u.get("documento","") not in _docs_conf_2]
+
+            if _pend_2:
+                _n_div_pend = sum(
+                    1 for r in _pend_2[-1].get("dados",[])
+                    if float(str(r.get("Divergencia Qtd",0)).replace(",",".") or 0) != 0)
+                if _n_div_pend == 0:
+                    st.info(f"ℹ️ O último upload **não tem divergências**. Você pode adicionar um novo upload abaixo ou avançar para **Fechar**.")
+                else:
+                    st.warning(f"⚠️ O último upload tem **{_n_div_pend} divergência(s)**. Avance para **Conferência** antes de fechar.")
         else:
             st.info("Nenhum upload ERP ainda. Faça o upload abaixo.")
 
