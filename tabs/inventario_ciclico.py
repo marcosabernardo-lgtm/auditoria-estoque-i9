@@ -803,21 +803,28 @@ def render(df_jlle, df_outras, formatar_br):
 
     # Cards — 7 etapas (novo fluxo)
     st.markdown("---")
-    c1,c2,c3,c4,c5,c6,c7 = st.columns(7)
-    b1 = _card(c1,1,"Gerar lista",   "Define o ciclo e a lista",
+    # Verifica se upload atual tem divergências (para ativar card Conferência)
+    _tem_div_atual = False
+    if erp_uploads_ativo:
+        _docs_conf_check = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo) if _num_ciclo_ativo else set()
+        _uploads_pend = [u for u in erp_uploads_ativo if u.get("documento","") not in _docs_conf_check]
+        if _uploads_pend:
+            _dados_pend = _uploads_pend[-1].get("dados",[])
+            _tem_div_atual = any(float(str(r.get("Divergencia Qtd",0)).replace(",",".") or 0) != 0 for r in _dados_pend)
+
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    b1 = _card(c1,1,"Gerar lista",  "Define o ciclo e a lista",
                ativo=(etapa_nav==1), concluido=(ciclo_ativo is not None), chave="ic_n1")
-    b2 = _card(c2,2,"Upload ERP",    "Importa relatório Protheus",
+    b2 = _card(c2,2,"Upload ERP",   "Importa relatório Protheus",
                ativo=(etapa_nav==2), concluido=(len(erp_uploads_ativo)>0), chave="ic_n2")
-    b3 = _card(c3,3,"Add etapa",     "Confirma e acumula uploads",
-               ativo=(etapa_nav==3), concluido=(pct_ciclo>=100), chave="ic_n3")
-    b4 = _card(c4,4,"Conferência",   "Divergências e justificativas",
-               ativo=(etapa_nav==4), concluido=_conf_concluida, chave="ic_n4")
-    b5 = _card(c5,5,"NF de Ajuste",  "Upload da NF de baixa/perda",
-               ativo=(etapa_nav==5), concluido=_nf_concluida, chave="ic_n5")
-    b6 = _card(c6,6,"Fechar",        "Relatório final e fechamento",
-               ativo=(etapa_nav==6), concluido=(len(ciclos)>0), chave="ic_n6")
-    b7 = _card(c7,7,"Histórico",     "PDFs dos ciclos fechados",
-               ativo=(etapa_nav==7), concluido=False, chave="ic_n7")
+    b3 = _card(c3,3,"Conferência",  "Divergências e justificativas",
+               ativo=(etapa_nav==3), concluido=_conf_concluida, chave="ic_n3")
+    b4 = _card(c4,4,"NF de Ajuste", "Upload da NF de baixa/perda",
+               ativo=(etapa_nav==4), concluido=_nf_concluida, chave="ic_n4")
+    b5 = _card(c5,5,"Fechar",       "Relatório final e fechamento",
+               ativo=(etapa_nav==5), concluido=(len(ciclos)>0), chave="ic_n5")
+    b6 = _card(c6,6,"Histórico",    "PDFs dos ciclos fechados",
+               ativo=(etapa_nav==6), concluido=False, chave="ic_n6")
 
     if b1: st.session_state["ic_etapa_nav"]=1; st.rerun()
     if b2: st.session_state["ic_etapa_nav"]=2; st.rerun()
@@ -825,7 +832,6 @@ def render(df_jlle, df_outras, formatar_br):
     if b4: st.session_state["ic_etapa_nav"]=4; st.rerun()
     if b5: st.session_state["ic_etapa_nav"]=5; st.rerun()
     if b6: st.session_state["ic_etapa_nav"]=6; st.rerun()
-    if b7: st.session_state["ic_etapa_nav"]=7; st.rerun()
 
     st.markdown("---")
 
@@ -1056,6 +1062,8 @@ def render(df_jlle, df_outras, formatar_br):
                     # Registra produtos contados via ERP no ciclo ativo
                     ciclo_f = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
                     ups_at  = ciclo_f.get("uploads",[]) if ciclo_f else []
+                    # Calcula divergências deste upload
+                    _n_div = int((df_erp["Divergencia Qtd"] != 0).sum()) if "Divergencia Qtd" in df_erp.columns else 0
                     up_info = {
                         "num_inv": documento, "data": date.today().strftime("%d/%m/%Y"),
                         "data_iso": date.today().isoformat(),
@@ -1074,7 +1082,10 @@ def render(df_jlle, df_outras, formatar_br):
                         conn.commit()
                     st.session_state["ic_force_reload"] = True
                     st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
-                    st.success(f"✅ Upload ERP documento {documento} adicionado!")
+                    if _n_div == 0:
+                        st.success(f"✅ Upload {documento} adicionado — **sem divergências**. Você pode adicionar um novo upload ou avançar para **Fechar**.")
+                    else:
+                        st.success(f"✅ Upload {documento} adicionado — **{_n_div} divergência(s)**. Avance para **Conferência**.")
                     st.rerun()
 
             except Exception as e:
@@ -1203,16 +1214,16 @@ def render(df_jlle, df_outras, formatar_br):
                 st.success("✅ Justificativas salvas!")
                 n_ajuste = sum(1 for v in justs_edit.values() if v == "Ajuste de inventário")
                 if n_ajuste > 0:
-                    st.warning(f"⚠️ **{n_ajuste} produto(s)** com 'Ajuste de inventário' — faça o upload da NF na Etapa 5.")
+                    st.warning(f"⚠️ **{n_ajuste} produto(s)** com 'Ajuste de inventário' — faça o upload da NF na Etapa 4.")
                 st.rerun()
 
             # Resumo salvo
             n_ajuste_salvo = sum(1 for v in justs_salvas.values() if v == "Ajuste de inventário")
             if n_ajuste_salvo > 0:
-                st.warning(f"⚠️ **{n_ajuste_salvo} produto(s)** marcados como 'Ajuste de inventário' — faça o upload da NF na Etapa 5.")
+                st.warning(f"⚠️ **{n_ajuste_salvo} produto(s)** marcados como 'Ajuste de inventário' — faça o upload da NF na Etapa 4.")
 
-    # ── ETAPA 5 — NF DE AJUSTE ────────────────────────────────────────────
-    elif etapa_nav == 5:
+    # ── ETAPA 4 — NF DE AJUSTE ─────────────────────────────────────────
+    elif etapa_nav == 4:
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 5. Upload da NF de Ajuste")
@@ -1290,8 +1301,8 @@ def render(df_jlle, df_outras, formatar_br):
         else:
             st.info("Faça o upload do PDF da NF para preencher os dados automaticamente.")
 
-    # ── ETAPA 4 — CONFERÊNCIA (divergências + justificativas) ────────────
-    elif etapa_nav == 4:
+    # ── ETAPA 3 — CONFERÊNCIA ────────────────────────────────────
+    elif etapa_nav == 3:
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 4. Conferência de divergências")
@@ -1391,11 +1402,11 @@ def render(df_jlle, df_outras, formatar_br):
                 n_ajuste = sum(1 for v in justs_edit.values() if v == "Ajuste de inventário")
                 st.success(f"✅ Upload {doc_atual} conferido!")
                 if n_ajuste > 0:
-                    st.warning(f"⚠️ **{n_ajuste} produto(s)** com 'Ajuste de inventário' — faça o upload da NF na Etapa 5.")
+                    st.warning(f"⚠️ **{n_ajuste} produto(s)** com 'Ajuste de inventário' — faça o upload da NF na Etapa 4.")
                 st.rerun()
 
-    # ── ETAPA 6 — FECHAR INVENTÁRIO ───────────────────────────────────────
-    elif etapa_nav == 6:
+    # ── ETAPA 5 — FECHAR INVENTÁRIO ──────────────────────────────────────
+    elif etapa_nav == 5:
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 6. Fechar inventário")
@@ -1617,8 +1628,8 @@ def render(df_jlle, df_outras, formatar_br):
         else:
             st.info("Nenhum ciclo ativo no momento.")
 
-    # ── ETAPA 5 — HISTÓRICO ───────────────────────────────────────────────
-    elif etapa_nav == 7:
+    # ── ETAPA 6 — HISTÓRICO ──────────────────────────────────────────────
+    elif etapa_nav == 6:
         if not empresa_sel or not filial_sel:
             st.warning("⚠️ Gere a lista primeiro (Etapa 1) para definir Empresa e Filial."); return
         st.markdown("### 7. Histórico KPMG")
