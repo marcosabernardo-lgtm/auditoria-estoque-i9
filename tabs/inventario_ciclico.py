@@ -707,8 +707,14 @@ def render(df_jlle, df_outras, formatar_br):
         if _deve_recarregar:
             st.session_state[f"{_cache_key}_contados"]    = db_obter_contados(engine_db, empresa_sel, filial_sel)
             st.session_state[f"{_cache_key}_ciclos"]      = db_obter_ciclos(engine_db, empresa_sel, filial_sel)
-            st.session_state[f"{_cache_key}_ciclo_ativo"] = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
-            st.session_state[_cache_key] = True  # marca como carregado
+            _ca = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+            st.session_state[f"{_cache_key}_ciclo_ativo"] = _ca
+            _num_c = _ca.get("num_ciclo","") if _ca else ""
+            st.session_state[f"{_cache_key}_erp_uploads"] = db_obter_erp_uploads(engine_db, empresa_sel, filial_sel, _num_c) if _num_c else []
+            st.session_state[f"{_cache_key}_nf_ajustes"]  = db_obter_nf_ajustes(engine_db, empresa_sel, filial_sel, _num_c) if _num_c else []
+            st.session_state[f"{_cache_key}_docs_conf"]   = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, _num_c) if _num_c else set()
+            st.session_state[f"{_cache_key}_justs"]       = db_obter_justificativas(engine_db, empresa_sel, filial_sel, _num_c) if _num_c else {}
+            st.session_state[_cache_key] = True
         contados    = st.session_state.get(f"{_cache_key}_contados", {})
         ciclos      = st.session_state.get(f"{_cache_key}_ciclos", [])
         ciclo_ativo = st.session_state.get(f"{_cache_key}_ciclo_ativo")
@@ -752,27 +758,25 @@ def render(df_jlle, df_outras, formatar_br):
 
     # Estado do ERP upload para o ciclo ativo
     _num_ciclo_ativo = ciclo_ativo.get("num_ciclo","") if ciclo_ativo else ""
-    erp_uploads_ativo = db_obter_erp_uploads(engine_db, empresa_sel, filial_sel,
-                   _num_ciclo_ativo) if empresa_sel and filial_sel and ciclo_ativo else []
+    erp_uploads_ativo = st.session_state.get(f"{_cache_key}_erp_uploads", []) if empresa_sel and filial_sel else []
     erp_upload = erp_uploads_ativo[0] if erp_uploads_ativo else None
 
     # NF de ajuste para o ciclo ativo
-    nf_ajustes_ativo = db_obter_nf_ajustes(engine_db, empresa_sel, filial_sel,
-                   _num_ciclo_ativo) if empresa_sel and filial_sel and ciclo_ativo else []
+    nf_ajustes_ativo = st.session_state.get(f"{_cache_key}_nf_ajustes", []) if empresa_sel and filial_sel else []
 
     # Conferência concluída: todos os uploads ERP foram conferidos
     _conf_concluida = False
     _nf_concluida   = False
     if _num_ciclo_ativo and empresa_sel and filial_sel and erp_uploads_ativo:
         try:
-            _docs_conf = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo)
+            _docs_conf = st.session_state.get(f"{_cache_key}_docs_conf", set())
             _docs_erp  = {u.get("documento","") for u in erp_uploads_ativo}
             # Conferência concluída APENAS se todos os docs ERP foram conferidos
             _conf_concluida = bool(_docs_erp and _docs_erp.issubset(_docs_conf))
 
             # NF concluída se conferência ok E não há "Ajuste de inventário" pendente ou há NF salva
             if _conf_concluida:
-                _justs = db_obter_justificativas(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo)
+                _justs = st.session_state.get(f"{_cache_key}_justs", {})
                 _n_ajuste = sum(1 for p,j in _justs.items()
                                if j == "Ajuste de inventário" and not p.startswith("_"))
                 _nf_concluida = (_n_ajuste == 0) or (len(nf_ajustes_ativo) > 0)
@@ -791,7 +795,7 @@ def render(df_jlle, df_outras, formatar_br):
     # Verifica se upload atual tem divergências (para ativar card Conferência)
     _tem_div_atual = False
     if erp_uploads_ativo:
-        _docs_conf_check = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, _num_ciclo_ativo) if _num_ciclo_ativo else set()
+        _docs_conf_check = st.session_state.get(f"{_cache_key}_docs_conf", set()) if _num_ciclo_ativo else set()
         _uploads_pend = [u for u in erp_uploads_ativo if u.get("documento","") not in _docs_conf_check]
         if _uploads_pend:
             _dados_pend = _uploads_pend[-1].get("dados",[])
@@ -985,7 +989,7 @@ def render(df_jlle, df_outras, formatar_br):
                         st.dataframe(df_prev, use_container_width=True, hide_index=True)
 
             # Verifica uploads não conferidos
-            _docs_conf_2 = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, num_ciclo_erp)
+            _docs_conf_2 = st.session_state.get(f"{_cache_key}_docs_conf", set())
             _pend_2 = [u for u in erp_uploads_ativo if u.get("documento","") not in _docs_conf_2]
 
             if _pend_2:
@@ -1066,7 +1070,7 @@ def render(df_jlle, df_outras, formatar_br):
                                          num_ciclo_erp, documento, date.today().isoformat(),
                                          df_erp[cols_prev].to_dict("records"))
                     # Registra produtos contados via ERP no ciclo ativo
-                    ciclo_f = db_obter_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+                    ciclo_f = ciclo_ativo  # usa cache local
                     ups_at  = ciclo_f.get("uploads",[]) if ciclo_f else []
                     # Calcula divergências deste upload
                     _n_div = int((df_erp["Divergencia Qtd"] != 0).sum()) if "Divergencia Qtd" in df_erp.columns else 0
@@ -1111,7 +1115,7 @@ def render(df_jlle, df_outras, formatar_br):
         _nf_idx = len(nf_ajustes_ativo)  # índice único por NF nova
 
         # Lê justificativas diretamente do banco (não do cache)
-        justs_conf   = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_nf)
+        justs_conf   = st.session_state.get(f"{_cache_key}_justs", {})
         prods_ajuste = {p: j for p,j in justs_conf.items()
                         if j == "Ajuste de inventário" and not p.startswith("_")}
 
@@ -1189,7 +1193,7 @@ def render(df_jlle, df_outras, formatar_br):
         num_ciclo_conf = ciclo_ativo.get("num_ciclo","")
 
         # Documentos ERP já conferidos
-        docs_conferidos = db_obter_documentos_conferidos(engine_db, empresa_sel, filial_sel, num_ciclo_conf)
+        docs_conferidos = st.session_state.get(f"{_cache_key}_docs_conf", set())
 
         # Uploads ERP ainda NÃO conferidos
         uploads_pendentes = [u for u in erp_uploads_ativo if u.get("documento","") not in docs_conferidos]
@@ -1231,7 +1235,7 @@ def render(df_jlle, df_outras, formatar_br):
         ]
 
         # Carrega justificativas já salvas para este documento
-        justs_salvas = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf)
+        justs_salvas = st.session_state.get(f"{_cache_key}_justs", {})
 
         if df_div.empty:
             st.success("✅ Nenhuma divergência neste upload.")
@@ -1297,7 +1301,7 @@ def render(df_jlle, df_outras, formatar_br):
                   </div></div>""", unsafe_allow_html=True)
 
             # Carrega TODOS os uploads ERP do ciclo e consolida
-            erp_uploads_fech = db_obter_erp_uploads(engine_db, empresa_sel, filial_sel, num_ciclo_fech)
+            erp_uploads_fech = st.session_state.get(f"{_cache_key}_erp_uploads", [])
             # Consolida todos os dados ERP em um único DataFrame
             if erp_uploads_fech:
                 df_erp_fech = pd.concat(
@@ -1317,8 +1321,8 @@ def render(df_jlle, df_outras, formatar_br):
                 st.success(f"✅ {len(erp_uploads_fech)} upload(s) ERP · {len(df_erp_fech)} produtos · Documentos: **{docs}**")
 
             # Carrega justificativas e NFs de ajuste
-            justs_fech = db_obter_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_fech)
-            nfs_fech   = db_obter_nf_ajustes(engine_db, empresa_sel, filial_sel, num_ciclo_fech)
+            justs_fech = st.session_state.get(f"{_cache_key}_justs", {})
+            nfs_fech   = st.session_state.get(f"{_cache_key}_nf_ajustes", [])
 
             # Mapa de itens da NF de ajuste: {codigo: {Qtd, Vl Total}}
             nf_map = {}
