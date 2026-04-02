@@ -428,8 +428,8 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         # Agrupa por documento
         _docs_map = defaultdict(list)
         for r in _erp_data:
-            doc = str(r.get("Documento","—")).strip()
-            _docs_map[doc].append(r)
+            _doc_num = str(r.get("Documento","—")).strip()
+            _docs_map[_doc_num].append(r)
 
         if not _docs_map:
             # Fallback: uma linha só com totais do ciclo
@@ -451,8 +451,8 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
             # Uma linha por documento/upload
             docs_list = list(_docs_map.keys())
             n_docs = len(docs_list)
-            for j, doc in enumerate(docs_list):
-                itens_doc = _docs_map[doc]
+            for j, _doc_num in enumerate(docs_list):
+                itens_doc = _docs_map[_doc_num]
                 n_sku_doc = len(set(str(r.get("Codigo","")).zfill(6) for r in itens_doc))
                 # SKUs divergentes neste documento
                 n_div_doc = sum(1 for r in itens_doc
@@ -467,7 +467,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
                     Paragraph(num_c  if j == 0 else "", s_cell),
                     Paragraph(c.get("data","—"),        s_cell_c),
                     Paragraph(c.get("responsavel","—") if j == 0 else "", s_cell),
-                    Paragraph(doc,                      s_cell_c),
+                    Paragraph(_doc_num,                 s_cell_c),
                     Paragraph(str(n_sku_doc),           s_cell_c),
                     Paragraph(str(n_div_doc),           s_cell_c),
                     Paragraph(cobertura_doc,            s_cell_c),
