@@ -1503,13 +1503,69 @@ def render(df_jlle, df_outras, formatar_br):
                             del st.session_state[_k]
                         st.rerun()
             else:
-                col_bt, col_ms = st.columns([1,3])
-                with col_bt: st.button("🏁 Fechar inventário", key="ic_fbl", disabled=True)
-                with col_ms:
-                    fl = sorted(list(faltam))[:10]
-                    ms = len(faltam)-10 if len(faltam)>10 else 0
-                    ls = ", ".join(f"`{p}`" for p in fl) + (f" e mais {ms}" if ms else "")
-                    st.warning(f"⚠️ Faltam **{len(faltam)}** produtos: {ls}")
+                # SKUs pendentes — oferece escolha
+                fl = sorted(list(faltam))
+                ms = len(faltam)-5 if len(faltam)>5 else 0
+                ls = ", ".join(f"`{p}`" for p in fl[:5]) + (f" e mais {ms}" if ms else "")
+
+                st.warning(f"⚠️ **Faltam {len(faltam)} SKU(s) para contar:** {ls}")
+                st.markdown("Os itens não contados permanecerão na próxima lista com **alta prioridade**.")
+
+                col_fin, col_vol = st.columns(2)
+                with col_fin:
+                    if st.button("🏁 Finalizar assim mesmo", type="primary", key="ic_fechar_parcial",
+                                 use_container_width=True):
+                        st.session_state["ic_confirmar_parcial"] = True
+                        st.rerun()
+                with col_vol:
+                    if st.button("📋 Voltar ao Upload ERP", key="ic_voltar_upload",
+                                 use_container_width=True):
+                        st.session_state["ic_etapa_nav"] = 2
+                        st.rerun()
+
+                # Confirmação após clique em Finalizar assim mesmo
+                if st.session_state.get("ic_confirmar_parcial"):
+                    st.error(f"⚠️ Confirma o fechamento com **{len(faltam)} SKU(s) não contado(s)**?")
+                    cc1, cc2 = st.columns(2)
+                    with cc1:
+                        if st.button("✅ Sim, fechar", type="primary", key="ic_fechar_conf",
+                                     use_container_width=True):
+                            # Fecha com os itens que foram contados
+                            todos = set()
+                            for u in _uploads: todos.update(str(p).strip().zfill(6) for p in u.get("produtos",[]))
+                            data_iso = _uploads[-1].get("data_iso", date.today().isoformat()) if _uploads else date.today().isoformat()
+                            pct_f = len(todos & pl_ciclo)/len(pl_ciclo)*100 if pl_ciclo else 0
+                            df_rel   = montar_df_relatorio(_uploads, df_filial)
+                            rel_json = df_rel.to_json(orient="records", force_ascii=False) if not df_rel.empty else "[]"
+                            df_erp_raw2 = pd.concat(
+                                [pd.DataFrame(u["dados"]) for u in erp_uploads_ativo if u.get("dados")],
+                                ignore_index=True) if erp_uploads_ativo else pd.DataFrame()
+                            erp_json2 = df_erp_raw2.to_json(orient="records", force_ascii=False) if not df_erp_raw2.empty else "[]"
+                            cf = {**ciclo_ativo,
+                                  "uploads": _uploads, "qtd_uploads": len(_uploads),
+                                  "produtos_contados": list(todos),
+                                  "data": date.today().strftime("%d/%m/%Y"),
+                                  "responsavel": st.session_state.get("_app_operador","—"),
+                                  "cobertura_pct": pct_f, "status": "Concluído (parcial)",
+                                  "relatorio_json": rel_json, "erp_json": erp_json2}
+                            try:
+                                db_gravar_ciclo(engine_db, empresa_sel, filial_sel, cf)
+                            except Exception as _e:
+                                st.error(f"Erro ao gravar: {_e}"); st.stop()
+                            db_marcar_contados(engine_db, empresa_sel, filial_sel, list(todos),
+                                               data=data_iso, num_ciclo=ciclo_ativo.get("num_ciclo",""))
+                            db_fechar_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+                            st.session_state.pop("ic_confirmar_parcial", None)
+                            st.session_state["ic_fechado_msg"]  = True
+                            st.session_state["ic_etapa_nav"]    = 6
+                            st.session_state["ic_force_reload"] = True
+                            for _k in [k for k in st.session_state if k.startswith("ic_cache_") or k.startswith("_pdf5_")]:
+                                del st.session_state[_k]
+                            st.rerun()
+                    with cc2:
+                        if st.button("❌ Cancelar", key="ic_fechar_cancel", use_container_width=True):
+                            st.session_state.pop("ic_confirmar_parcial", None)
+                            st.rerun()
         else:
             st.info("Nenhum ciclo ativo no momento.")
 
