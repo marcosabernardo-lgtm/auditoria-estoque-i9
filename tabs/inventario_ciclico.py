@@ -412,7 +412,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     elems.append(Spacer(1, 0.3*cm))
 
     h_ciclos = [Paragraph(h, s_cellh) for h in
-                ["#","Nº Ciclo","Data Contagem","Responsável","Nº Inv.","SKUs","SKUs Div.","Cobertura","Acuracidade"]]
+                ["#","Nº Ciclo","Data Contagem","Responsável","Nº Inv.","SKUs","Div.","Cobertura","Acurácia"]]
     rows_ciclos = [h_ciclos]
     for i, c in enumerate(ciclos_sel, 1):
         num_c = c.get("num_ciclo","")
@@ -475,7 +475,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
                 ])
 
     tbl_ciclos = Table(rows_ciclos,
-                       colWidths=[0.7*cm, 4.5*cm, 2.2*cm, 3.5*cm, 2.5*cm, 1.3*cm, 1.3*cm, 1.8*cm, 2*cm],
+                       colWidths=[0.7*cm, 5.5*cm, 2.2*cm, 3.5*cm, 2.0*cm, 1.3*cm, 1.3*cm, 1.8*cm, 2.0*cm],
                        repeatRows=1)
     tbl_ciclos.setStyle(TableStyle([
         ("BACKGROUND",     (0,0), (-1,0),  C_TEAL),
