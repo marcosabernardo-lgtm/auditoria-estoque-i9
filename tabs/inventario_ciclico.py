@@ -955,11 +955,28 @@ def render(df_jlle, df_outras, formatar_br):
                 "uploads":        _uploads,
                 "status":         "Em andamento",
             })
-            # Limpa todo o cache e navega para etapa 2
+            # Injeta ciclo ativo diretamente no cache — não depende de releitura do banco
+            _novo_ciclo = {
+                "num_ciclo":      num_ciclo,
+                "data_geracao":   date.today().strftime("%d/%m/%Y"),
+                "label":          label,
+                "qtd_lista":      len(df_exib),
+                "produtos_lista": df_exib["Produto"].astype(str).tolist(),
+                "uploads":        _uploads,
+                "status":         "Em andamento",
+            }
             for _k in list(st.session_state.keys()):
                 if _k.startswith("ic_cache_"):
                     del st.session_state[_k]
-            st.session_state.pop("ic_force_reload", None)
+            _ck = f"ic_cache_{empresa_sel}_{filial_sel}"
+            st.session_state[f"{_ck}_ciclo_ativo"] = _novo_ciclo
+            st.session_state[f"{_ck}_erp_uploads"] = []
+            st.session_state[f"{_ck}_nf_ajustes"]  = []
+            st.session_state[f"{_ck}_docs_conf"]   = set()
+            st.session_state[f"{_ck}_justs"]       = {}
+            st.session_state[f"{_ck}_contados"]    = contados
+            st.session_state[f"{_ck}_ciclos"]      = ciclos
+            st.session_state[_ck] = True
             st.session_state["ic_etapa_nav"] = 2
             st.rerun()
 
