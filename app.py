@@ -8,7 +8,7 @@ from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, b
 from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
-from tabs import auditoria, indicadores, inventario_ciclico
+from tabs import auditoria, indicadores, inventario_ciclico, ajustes_inventario
 
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
@@ -258,7 +258,7 @@ st.session_state["_estilizar_func"]  = estilizar_tabela
 st.session_state["_to_float_func"]   = to_float_br
 st.session_state["_tratar_df"]       = _tratar_mov
 
-tab1, tab2, tab3 = st.tabs(["📋 Auditoria", "📊 Indicadores", "🔄 Inv. Cíclico"])
+tab1, tab2, tab3, tab4 = st.tabs(["📋 Auditoria", "📊 Indicadores", "🔄 Inv. Cíclico", "📋 Ajustes"])
 
 with tab1:
     auditoria.render(v_jlle_view, estilizar_tabela, para_excel)
@@ -266,3 +266,5 @@ with tab2:
     indicadores.render(dff_jlle, formatar_br)
 with tab3:
     inventario_ciclico.render(dff_jlle, dff_outras, formatar_br)
+with tab4:
+    ajustes_inventario.render(empresa_sel, filial_sel, formatar_br)
