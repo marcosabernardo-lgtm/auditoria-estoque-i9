@@ -874,8 +874,8 @@ def render(df_jlle, df_outras, formatar_br):
         if modo == "Quantidade fixa":
             st.caption("📌 Conta um número fixo de produtos por ciclo.")
             cols_b = st.columns([1,1,1,1,2])
-            if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 4
-            for cb,qtd in zip(cols_b[:4],[4,30,50,80]):
+            if "ic_qtd" not in st.session_state: st.session_state.ic_qtd = 30
+            for cb,qtd in zip(cols_b[:4],[30,50,80,100]):
                 with cb:
                     if st.button(f"{qtd}",key=f"ic_q{qtd}",type="primary" if st.session_state.ic_qtd==qtd else "secondary",use_container_width=True):
                         st.session_state.ic_qtd=qtd
