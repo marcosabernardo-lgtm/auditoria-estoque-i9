@@ -1267,6 +1267,10 @@ def render(df_jlle, df_outras, formatar_br):
             if st.button("✔ Confirmar conferência sem divergências", type="primary", key="btn_conf_sem_div"):
                 db_salvar_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf,
                                           {"_ok": "Sem divergências"}, documento=doc_atual)
+                # Atualiza cache local
+                _docs_upd = set(st.session_state.get(f"{_cache_key}_docs_conf", set()))
+                _docs_upd.add(doc_atual)
+                st.session_state[f"{_cache_key}_docs_conf"] = _docs_upd
                 st.success(f"✅ Upload {doc_atual} conferido!")
                 st.rerun()
         else:
@@ -1300,9 +1304,15 @@ def render(df_jlle, df_outras, formatar_br):
 
             if st.button("💾 Salvar e confirmar conferência", type="primary", key="btn_salvar_just4"):
                 justs_edit = dict(zip(df_result["Codigo"].astype(str), df_result["Justificativa"].astype(str)))
-                # Salva justificativas com o documento conferido
                 db_salvar_justificativas(engine_db, empresa_sel, filial_sel, num_ciclo_conf,
                                           justs_edit, documento=doc_atual)
+                # Atualiza cache local
+                _justs_upd = dict(st.session_state.get(f"{_cache_key}_justs", {}))
+                _justs_upd.update(justs_edit)
+                st.session_state[f"{_cache_key}_justs"] = _justs_upd
+                _docs_upd = set(st.session_state.get(f"{_cache_key}_docs_conf", set()))
+                _docs_upd.add(doc_atual)
+                st.session_state[f"{_cache_key}_docs_conf"] = _docs_upd
                 n_ajuste = sum(1 for v in justs_edit.values() if v == "Ajuste de inventário")
                 st.success(f"✅ Upload {doc_atual} conferido!")
                 if n_ajuste > 0:
