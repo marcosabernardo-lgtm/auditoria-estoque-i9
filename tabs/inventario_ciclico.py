@@ -1198,8 +1198,11 @@ def render(df_jlle, df_outras, formatar_br):
                     db_salvar_nf_ajuste(engine_db, empresa_sel, filial_sel, num_ciclo_nf,
                                          nf_dados["num_nf"], data_nf_iso, nf_dados["natureza"],
                                          nf_dados["itens"])
-                    st.session_state["ic_force_reload"] = True
-                    st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
+                    # Atualiza cache local
+                    _nf_upd = list(st.session_state.get(f"{_cache_key}_nf_ajustes", []))
+                    _nf_upd.append({"num_nf": nf_dados["num_nf"], "data_nf": data_nf_iso,
+                                    "natureza": nf_dados["natureza"], "dados": nf_dados["itens"]})
+                    st.session_state[f"{_cache_key}_nf_ajustes"] = _nf_upd
                     st.success(f"✅ NF {nf_dados['num_nf']} salva com {len(nf_dados['itens'])} item(ns)!")
                     st.rerun()
         else:
@@ -1550,8 +1553,6 @@ def render(df_jlle, df_outras, formatar_br):
                     if st.button("📋 Voltar ao Upload ERP", key="ic_voltar_upload",
                                  use_container_width=True):
                         st.session_state["ic_etapa_nav"] = 2
-                        st.session_state["ic_force_reload"] = True
-                        st.session_state.pop(f"ic_cache_{empresa_sel}_{filial_sel}", None)
                         st.rerun()
 
                 # Confirmação após clique em Finalizar assim mesmo
