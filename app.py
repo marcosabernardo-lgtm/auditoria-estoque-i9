@@ -217,16 +217,26 @@ if df_base is None or df_base.empty:
 
 st.session_state["_data_auditoria"] = st.session_state.get("_data_auditoria", _dt.now().strftime("%d/%m/%Y %H:%M"))
 
-# Filtro de status e código (empresa/filial já fixados pela seleção)
+# Filtro de status e código/descrição (empresa/filial já fixados pela seleção)
 c1, c2 = st.columns([2, 2])
 with c1: f_stat = st.radio("✔️ Status", ["Todos", "OK", "Divergente"], horizontal=True)
-with c2: f_code = st.text_input("🔍 Consulta por Código", placeholder="Digite o código...")
+with c2: f_code = st.text_input("🔍 Consulta por Código ou Descrição", placeholder="Digite o código ou parte da descrição...")
 
-dff = df_base if f_stat == "Todos" else df_base[df_base["Status"] == f_stat]
-if f_code: dff = dff[dff["Produto"].astype(str).str.contains(f_code, na=False)]
+# Base sem filtro de busca — usada pelas outras abas (Indicadores, Inv. Cíclico, Ajustes)
+dff_base_abas = df_base if f_stat == "Todos" else df_base[df_base["Status"] == f_stat]
+
+# Filtro de busca aplicado SOMENTE para a aba Auditoria
+dff_auditoria = dff_base_abas.copy()
+if f_code:
+    termo = f_code.strip()
+    mask = (
+        dff_auditoria["Produto"].astype(str).str.contains(termo, na=False, case=False) |
+        dff_auditoria["Descrição"].astype(str).str.contains(termo, na=False, case=False)
+    )
+    dff_auditoria = dff_auditoria[mask]
 
 # Usa todos os dados da filial selecionada diretamente
-dff_jlle = dff.copy()
+dff_jlle = dff_base_abas.copy()
 dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
 dff_outras = pd.DataFrame()  # não usado mais
 
@@ -247,7 +257,9 @@ def preparar_view(df):
     resto = [c for c in df_v.columns if c not in colunas_ok]
     return df_v[colunas_ok + resto]
 
-v_jlle_view   = preparar_view(dff_jlle)
+# View da auditoria usa o filtro de busca; outras abas usam dff_jlle sem esse filtro
+dff_auditoria["Filial"] = dff_auditoria["Filial"].str.split(" - ").str[-1]
+v_jlle_view   = preparar_view(dff_auditoria)
 v_outras_view = preparar_view(dff_outras)
 
 # Injeta dependências para uso nas abas
