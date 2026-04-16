@@ -100,6 +100,62 @@ def db_obter_ajustes(engine, empresa, filial, mes=None, ano=None):
         return []
 
 
+def db_obter_ajustes_datas(engine, empresa, filial, data_de, data_ate):
+    """Busca ajustes manuais entre duas datas."""
+    if engine is None: return []
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT id, num_nf, data_nf, natureza, justificativa,
+                       dados_json, operador, origem, num_ciclo, criado_em
+                FROM inventario_ajustes
+                WHERE empresa=:e AND filial=:f
+                  AND data_nf BETWEEN :de AND :ate
+                ORDER BY criado_em DESC
+            """), {"e":empresa,"f":filial,"de":str(data_de),"ate":str(data_ate)}).fetchall()
+        result = []
+        for r in rows:
+            try: dados = json.loads(r[5] or "[]")
+            except: dados = []
+            result.append({
+                "id":r[0],"num_nf":r[1],"data_nf":str(r[2]) if r[2] else "",
+                "natureza":r[3],"justificativa":r[4],"dados":dados,
+                "operador":r[6],"origem":r[7],"num_ciclo":r[8],
+                "criado_em":str(r[9]) if r[9] else "",
+            })
+        return result
+    except Exception as ex:
+        st.error(f"Erro ao buscar ajustes: {ex}")
+        return []
+
+
+def db_obter_ajustes_ciclos_datas(engine, empresa, filial, data_de, data_ate):
+    """Busca NFs do cíclico entre duas datas."""
+    if engine is None: return []
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT num_nf, data_nf, natureza, dados_json, num_ciclo, atualizado_em
+                FROM inventario_nf_ajuste
+                WHERE empresa=:e AND filial=:f
+                  AND data_nf BETWEEN :de AND :ate
+                ORDER BY atualizado_em DESC
+            """), {"e":empresa,"f":filial,"de":str(data_de),"ate":str(data_ate)}).fetchall()
+        result = []
+        for r in rows:
+            try: dados = json.loads(r[3] or "[]")
+            except: dados = []
+            result.append({
+                "num_nf":r[0],"data_nf":str(r[1]) if r[1] else "",
+                "natureza":r[2],"dados":dados,"num_ciclo":r[4],
+                "origem":"ciclico","justificativa":"Ajuste de inventário",
+                "operador":"—","criado_em":str(r[5]) if r[5] else "",
+            })
+        return result
+    except Exception as ex:
+        return []
+
+
 def db_obter_ajustes_periodo(engine, empresa, filial, mes_de, ano_de, mes_ate, ano_ate):
     """Busca ajustes manuais em um intervalo de mês/ano."""
     if engine is None: return []
@@ -283,36 +339,25 @@ def render(empresa_sel, filial_sel, formatar_br):
         st.markdown("### Relatório Consolidado de Ajustes")
         st.caption("Inclui NFs registradas manualmente e via Inventário Cíclico.")
 
-        # Filtros de período
-        meses_map = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,
-                     "Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
-        meses_lista = list(meses_map.keys())
-        anos_lista  = list(range(date.today().year, 2023, -1))
-        mes_atual   = meses_lista[date.today().month - 1]
+        # Origem acima dos filtros de data
+        origem_sel = st.radio("Origem", ["Todos","Manual","Cíclico"],
+                              horizontal=True, key="aj_origem")
 
         st.markdown("**Período:**")
-        col_d1, col_d2, col_a1, col_a2, col_or = st.columns([1,1,1,1,2])
+        _primeiro_dia = date(date.today().year, date.today().month, 1)
+        col_d1, col_d2 = st.columns(2)
         with col_d1:
-            mes_de  = st.selectbox("De — Mês", meses_lista, index=0, key="aj_mes_de")
+            data_de = st.date_input("De", value=_primeiro_dia,
+                                    format="DD/MM/YYYY", key="aj_data_de")
         with col_d2:
-            ano_de  = st.selectbox("De — Ano", anos_lista, key="aj_ano_de")
-        with col_a1:
-            mes_ate = st.selectbox("Até — Mês", meses_lista,
-                                   index=meses_lista.index(mes_atual), key="aj_mes_ate")
-        with col_a2:
-            ano_ate = st.selectbox("Até — Ano", anos_lista, key="aj_ano_ate")
-        with col_or:
-            st.markdown("<div style='margin-top:26px'></div>", unsafe_allow_html=True)
-            origem_sel = st.radio("Origem", ["Todos","Manual","Cíclico"],
-                                  horizontal=True, key="aj_origem")
+            data_ate = st.date_input("Até", value=date.today(),
+                                     format="DD/MM/YYYY", key="aj_data_ate")
 
         if st.button("🔍 Carregar relatório", type="primary", key="aj_btn_rel"):
-            mes_de_n  = meses_map[mes_de]
-            mes_ate_n = meses_map[mes_ate]
-            ajustes_manual  = db_obter_ajustes_periodo(engine, empresa_sel, filial_sel,
-                                                        mes_de_n, ano_de, mes_ate_n, ano_ate)
-            ajustes_ciclico = db_obter_ajustes_ciclos_periodo(engine, empresa_sel, filial_sel,
-                                                               mes_de_n, ano_de, mes_ate_n, ano_ate)
+            ajustes_manual  = db_obter_ajustes_datas(engine, empresa_sel, filial_sel,
+                                                      data_de, data_ate)
+            ajustes_ciclico = db_obter_ajustes_ciclos_datas(engine, empresa_sel, filial_sel,
+                                                             data_de, data_ate)
 
             # Filtra por origem
             if origem_sel == "Manual":
@@ -369,7 +414,7 @@ def render(empresa_sel, filial_sel, formatar_br):
                         df.to_excel(w, index=False, sheet_name="Ajustes")
                     return buf.getvalue()
 
-                periodo = f"{mes_de}{ano_de}_a_{mes_ate}{ano_ate}"
+                periodo = f"{data_de.strftime('%d%m%Y')}_a_{data_ate.strftime('%d%m%Y')}"
                 st.download_button(
                     "📥 Exportar Excel",
                     data=_to_excel(df_rel),
