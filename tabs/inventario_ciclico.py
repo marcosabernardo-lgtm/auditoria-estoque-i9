@@ -866,10 +866,18 @@ def render(df_jlle, df_outras, formatar_br):
         if "Armazem" in df_filial.columns:
             _armazens_disponiveis = sorted(df_filial["Armazem"].dropna().unique().tolist())
         if _armazens_disponiveis:
+            # Garante que o default só contém valores válidos para a filial atual
+            _saved = st.session_state.get("ic_armazens_sel", _armazens_disponiveis)
+            _default_valido = [a for a in _saved if a in _armazens_disponiveis] if _saved else _armazens_disponiveis
+            if not _default_valido:
+                _default_valido = _armazens_disponiveis
+            # Remove a chave do session_state antes de recriar o widget com novo default
+            if "ic_armazens_sel" in st.session_state and st.session_state["ic_armazens_sel"] != _default_valido:
+                del st.session_state["ic_armazens_sel"]
             _arm_sel = st.multiselect(
                 "🏭 Filtrar por Armazém",
                 options=_armazens_disponiveis,
-                default=st.session_state.get("ic_armazens_sel", _armazens_disponiveis),
+                default=_default_valido,
                 key="ic_armazens_sel",
                 help="Selecione um ou mais armazéns. Deixe em branco para incluir todos.",
                 placeholder="Todos os armazéns",
