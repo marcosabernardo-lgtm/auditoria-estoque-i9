@@ -27,7 +27,7 @@ except ImportError:
 
 def parsear_nf_danfe(arquivo_bytes):
     """Extrai dados da NF-e DANFE (formato Alltech/TOTVS Protheus) via pdfplumber."""
-    import re, io as _io
+    import re as _re, io as _io
     result = {"num_nf":"","data":"","natureza":"","itens":[]}
     try:
         import pdfplumber
@@ -36,42 +36,51 @@ def parsear_nf_danfe(arquivo_bytes):
     except Exception as e:
         return result, str(e)
 
-    # Nº da NF
-    nums = re.findall(r'N\.\s*0*(\d+)', text)
+    def _br_float(s):
+        """Converte número BR com ponto de milhar (1.989,10) para float."""
+        s = str(s).strip()
+        if "," in s:
+            # Remove pontos de milhar, troca vírgula decimal por ponto
+            s = s.replace(".", "").replace(",", ".")
+        return float(s)
+
+    nums = _re.findall(r'N\.\s*0*(\d+)', text)
     if nums: result["num_nf"] = nums[0].zfill(9)
 
-    # Data de emissão
-    m = re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text)
+    m = _re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text)
     if m:
         result["data"] = m.group(1)
     else:
-        m = re.search(r'(\d{2}/\d{2}/\d{4})\s+\d{2}:\d{2}:\d{2}', text)
+        m = _re.search(r'(\d{2}/\d{2}/\d{4})\s+\d{2}:\d{2}:\d{2}', text)
         if m: result["data"] = m.group(1)
 
-    # Natureza da operação
-    m = re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text)
+    m = _re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text)
     if m:
         result["natureza"] = m.group(1).strip()
     else:
-        m = re.search(r'(BAIXA [A-Z]+|VENDA|TRANSFERENCIA|AJUSTE DE INVENTARIO)', text)
+        m = _re.search(r'(BAIXA [A-Z]+|VENDA|TRANSFERENCIA|AJUSTE DE INVENTARIO)', text)
         if m: result["natureza"] = m.group(1)
 
-    # Itens — padrão: CODPROD DESCRICAO NCM CST CFOP UN QUANT V.UNIT V.TOTAL
+    # Padrão: COD DESCRICAO NCM CST CFOP UN QUANT V.UNIT V.TOTAL
+    # Valores podem ter ponto de milhar: 1.989,10000 ou 5.967,30
     itens = []
-    padrao = re.compile(
-        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+([\d,]+)\s+([\d,]+(?:\d{3})?)\s+([\d,]+)',
-        re.MULTILINE)
+    padrao = _re.compile(
+        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+'
+        r'([\d,]+)\s+([\d.,]+)\s+([\d.,]+)',
+        _re.MULTILINE)
     for m in padrao.finditer(text):
-        itens.append({
-            "Codigo":   m.group(1),
-            "Descricao":m.group(2).strip(),
-            "Qtd":      float(m.group(3).replace(",",".")),
-            "Vl Unit":  float(m.group(4).replace(",",".")),
-            "Vl Total": float(m.group(5).replace(",",".")),
-        })
+        try:
+            itens.append({
+                "Codigo":   m.group(1),
+                "Descricao":m.group(2).strip(),
+                "Qtd":      _br_float(m.group(3)),
+                "Vl Unit":  _br_float(m.group(4)),
+                "Vl Total": _br_float(m.group(5)),
+            })
+        except:
+            pass
     result["itens"] = itens
     return result, None
-
 
 def processar_resultado_wms(arquivo):
     xls     = pd.ExcelFile(arquivo)

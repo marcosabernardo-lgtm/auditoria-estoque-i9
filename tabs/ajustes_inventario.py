@@ -8,42 +8,62 @@ from sqlalchemy import text
 
 # ── Parser DANFE (reutiliza o mesmo do inventário cíclico) ───────────────────
 def parsear_nf_danfe(arquivo_bytes):
-    import re, io as _io
+    """Extrai dados da NF-e DANFE (formato Alltech/TOTVS Protheus) via pdfplumber."""
+    import re as _re, io as _io
     result = {"num_nf":"","data":"","natureza":"","itens":[]}
     try:
         import pdfplumber
         with pdfplumber.open(_io.BytesIO(arquivo_bytes)) as pdf:
-            text_pdf = "\n".join(p.extract_text() or "" for p in pdf.pages)
+            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
     except Exception as e:
         return result, str(e)
-    nums = re.findall(r'N\.\s*0*(\d+)', text_pdf)
+
+    def _br_float(s):
+        """Converte número BR com ponto de milhar (1.989,10) para float."""
+        s = str(s).strip()
+        if "," in s:
+            # Remove pontos de milhar, troca vírgula decimal por ponto
+            s = s.replace(".", "").replace(",", ".")
+        return float(s)
+
+    nums = _re.findall(r'N\.\s*0*(\d+)', text)
     if nums: result["num_nf"] = nums[0].zfill(9)
-    m = re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text_pdf)
-    if m: result["data"] = m.group(1)
+
+    m = _re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text)
+    if m:
+        result["data"] = m.group(1)
     else:
-        m = re.search(r'(\d{2}/\d{2}/\d{4})\s+\d{2}:\d{2}:\d{2}', text_pdf)
+        m = _re.search(r'(\d{2}/\d{2}/\d{4})\s+\d{2}:\d{2}:\d{2}', text)
         if m: result["data"] = m.group(1)
-    m = re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text_pdf)
-    if m: result["natureza"] = m.group(1).strip()
+
+    m = _re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text)
+    if m:
+        result["natureza"] = m.group(1).strip()
     else:
-        m = re.search(r'(BAIXA [A-Z]+|VENDA|TRANSFERENCIA|AJUSTE DE INVENTARIO)', text_pdf)
+        m = _re.search(r'(BAIXA [A-Z]+|VENDA|TRANSFERENCIA|AJUSTE DE INVENTARIO)', text)
         if m: result["natureza"] = m.group(1)
+
+    # Padrão: COD DESCRICAO NCM CST CFOP UN QUANT V.UNIT V.TOTAL
+    # Valores podem ter ponto de milhar: 1.989,10000 ou 5.967,30
     itens = []
-    padrao = re.compile(
-        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+([\d,]+)\s+([\d,]+(?:\d{3})?)\s+([\d,]+)',
-        re.MULTILINE)
-    for m in padrao.finditer(text_pdf):
-        itens.append({
-            "Codigo": m.group(1), "Descricao": m.group(2).strip(),
-            "Qtd": float(m.group(3).replace(",",".")),
-            "Vl Unit": float(m.group(4).replace(",",".")),
-            "Vl Total": float(m.group(5).replace(",",".")),
-        })
+    padrao = _re.compile(
+        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+'
+        r'([\d,]+)\s+([\d.,]+)\s+([\d.,]+)',
+        _re.MULTILINE)
+    for m in padrao.finditer(text):
+        try:
+            itens.append({
+                "Codigo":   m.group(1),
+                "Descricao":m.group(2).strip(),
+                "Qtd":      _br_float(m.group(3)),
+                "Vl Unit":  _br_float(m.group(4)),
+                "Vl Total": _br_float(m.group(5)),
+            })
+        except:
+            pass
     result["itens"] = itens
     return result, None
 
-
-# ── DB helpers ────────────────────────────────────────────────────────────────
 def db_salvar_ajuste(engine, empresa, filial, num_nf, data_nf, natureza,
                      justificativa, dados, operador, origem="manual", num_ciclo=""):
     if engine is None: return False
