@@ -49,7 +49,7 @@ def _tratar_df(df_nf, to_float_func, deduplicar=True):
             .replace({"None": "", "nan": ""})
         )
         df_nf["Nota Devolução"] = df_nf["Nota Devolução"].apply(
-            lambda x: x.zfill(9) if x not in ("", "0" * 9) else ""
+            lambda x: str(x).zfill(9) if str(x) not in ("", "0" * 9) else ""
         )
 
     if "Centro Custo" in df_nf.columns:
