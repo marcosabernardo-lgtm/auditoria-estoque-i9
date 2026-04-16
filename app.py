@@ -185,18 +185,19 @@ if not st.session_state.get("_app_empresa"):
         filiais_labels = [f.split(" - ")[-1] if " - " in f else f for f in filiais_disp]
         fil_label = st.selectbox("📍 Filial", filiais_labels, key="sel_filial")
         fil_input = filiais_disp[filiais_labels.index(fil_label)] if fil_label in filiais_labels else fil_label
-        operador_input = st.text_input("👤 Nome do operador", key="sel_operador",
-                                        placeholder="Digite seu nome completo...")
-        _btn_ok = bool(operador_input.strip())
+        _operadores = ["", "Marcos Bernardo", "Victor Ferreira", "Rodrigo Ignácio", "Douglas Felipe"]
+        operador_input = st.selectbox("👤 Operador", _operadores, key="sel_operador",
+                                       format_func=lambda x: "Selecione seu nome..." if x == "" else x)
+        _btn_ok = bool(operador_input)
         if st.button("▶  Entrar", type="primary", use_container_width=True,
                      key="btn_entrar", disabled=not _btn_ok):
             st.session_state["_app_empresa"]    = emp_input
             st.session_state["_app_filial"]     = fil_input
-            st.session_state["_app_operador"]   = operador_input.strip()
+            st.session_state["_app_operador"]   = operador_input
             st.session_state["_data_auditoria"] = _dt.now().strftime("%d/%m/%Y %H:%M")
             st.rerun()
         if not _btn_ok:
-            st.caption("⚠️ Informe seu nome para continuar.")
+            st.caption("⚠️ Selecione seu nome para continuar.")
 
     st.stop()
 
