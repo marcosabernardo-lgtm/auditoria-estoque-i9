@@ -861,11 +861,42 @@ def render(df_jlle, df_outras, formatar_br):
         col_a.caption(f"📅 Dados carregados em: **{data_aud or 'esta sessão'}**  |  🏢 **{label}**")
         col_b.caption("⚠️ Itens divergentes reaparecem mesmo após contados.")
 
+        # ── Filtro por Armazém ────────────────────────────────────────────
+        _armazens_disponiveis = []
+        if "Armazem" in df_filial.columns:
+            _armazens_disponiveis = sorted(df_filial["Armazem"].dropna().unique().tolist())
+        if _armazens_disponiveis:
+            _arm_sel = st.multiselect(
+                "🏭 Filtrar por Armazém",
+                options=_armazens_disponiveis,
+                default=st.session_state.get("ic_armazens_sel", _armazens_disponiveis),
+                key="ic_armazens_sel",
+                help="Selecione um ou mais armazéns. Deixe em branco para incluir todos.",
+                placeholder="Todos os armazéns",
+            )
+            if _arm_sel:
+                df_filial_score = df_filial[df_filial["Armazem"].isin(_arm_sel)].copy()
+            else:
+                df_filial_score = df_filial.copy()
+        else:
+            df_filial_score = df_filial.copy()
+            _arm_sel = []
+
+        # Recalcula score com o df filtrado por armazém
+        if not df_filial_score.empty:
+            df_score   = calcular_score(df_filial_score, tuple(sorted(contados.items())))
+            total_skus = len(df_score)
+            total_cont = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
+            pct_cob    = (total_cont/total_skus*100) if total_skus>0 else 0
+        else:
+            df_score = pd.DataFrame(); total_skus = 0; total_cont = 0; pct_cob = 0.0
+        # ─────────────────────────────────────────────────────────────────
+
         c1m,c2m,c3m,c4m = st.columns(4)
         c1m.metric("Total SKUs",  f"{total_skus:,}")
-        c2m.metric("Divergentes", f"{int((df_score['Divergência']!=0).sum()):,}")
-        c3m.metric("Curva A",     f"{int((df_score['Curva ABC']=='A').sum()):,}")
-        c4m.metric("Valor Total", f"R$ {formatar_br(df_score['Vl Total ERP'].sum())}")
+        c2m.metric("Divergentes", f"{int((df_score['Divergência']!=0).sum()):,}" if not df_score.empty else "0")
+        c3m.metric("Curva A",     f"{int((df_score['Curva ABC']=='A').sum()):,}" if not df_score.empty else "0")
+        c4m.metric("Valor Total", f"R$ {formatar_br(df_score['Vl Total ERP'].sum())}" if not df_score.empty else "R$ 0")
 
         cor_b = "#27AE60" if pct_cob>=100 else "#EC6E21"
         st.markdown(
