@@ -8,62 +8,42 @@ from sqlalchemy import text
 
 # ── Parser DANFE (reutiliza o mesmo do inventário cíclico) ───────────────────
 def parsear_nf_danfe(arquivo_bytes):
-    """Extrai dados da NF-e DANFE (formato Alltech/TOTVS Protheus) via pdfplumber."""
-    import re as _re, io as _io
+    import re, io as _io
     result = {"num_nf":"","data":"","natureza":"","itens":[]}
     try:
         import pdfplumber
         with pdfplumber.open(_io.BytesIO(arquivo_bytes)) as pdf:
-            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+            text_pdf = "\n".join(p.extract_text() or "" for p in pdf.pages)
     except Exception as e:
         return result, str(e)
-
-    def _br_float(s):
-        """Converte número BR com ponto de milhar (1.989,10) para float."""
-        s = str(s).strip()
-        if "," in s:
-            # Remove pontos de milhar, troca vírgula decimal por ponto
-            s = s.replace(".", "").replace(",", ".")
-        return float(s)
-
-    nums = _re.findall(r'N\.\s*0*(\d+)', text)
+    nums = re.findall(r'N\.\s*0*(\d+)', text_pdf)
     if nums: result["num_nf"] = nums[0].zfill(9)
-
-    m = _re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text)
-    if m:
-        result["data"] = m.group(1)
+    m = re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text_pdf)
+    if m: result["data"] = m.group(1)
     else:
-        m = _re.search(r'(\d{2}/\d{2}/\d{4})\s+\d{2}:\d{2}:\d{2}', text)
+        m = re.search(r'(\d{2}/\d{2}/\d{4})\s+\d{2}:\d{2}:\d{2}', text_pdf)
         if m: result["data"] = m.group(1)
-
-    m = _re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text)
-    if m:
-        result["natureza"] = m.group(1).strip()
+    m = re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text_pdf)
+    if m: result["natureza"] = m.group(1).strip()
     else:
-        m = _re.search(r'(BAIXA [A-Z]+|VENDA|TRANSFERENCIA|AJUSTE DE INVENTARIO)', text)
+        m = re.search(r'(BAIXA [A-Z]+|VENDA|TRANSFERENCIA|AJUSTE DE INVENTARIO)', text_pdf)
         if m: result["natureza"] = m.group(1)
-
-    # Padrão: COD DESCRICAO NCM CST CFOP UN QUANT V.UNIT V.TOTAL
-    # Valores podem ter ponto de milhar: 1.989,10000 ou 5.967,30
     itens = []
-    padrao = _re.compile(
-        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+'
-        r'([\d,]+)\s+([\d.,]+)\s+([\d.,]+)',
-        _re.MULTILINE)
-    for m in padrao.finditer(text):
-        try:
-            itens.append({
-                "Codigo":   m.group(1),
-                "Descricao":m.group(2).strip(),
-                "Qtd":      _br_float(m.group(3)),
-                "Vl Unit":  _br_float(m.group(4)),
-                "Vl Total": _br_float(m.group(5)),
-            })
-        except:
-            pass
+    padrao = re.compile(
+        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+([\d,]+)\s+([\d,]+(?:\d{3})?)\s+([\d,]+)',
+        re.MULTILINE)
+    for m in padrao.finditer(text_pdf):
+        itens.append({
+            "Codigo": m.group(1), "Descricao": m.group(2).strip(),
+            "Qtd": float(m.group(3).replace(",",".")),
+            "Vl Unit": float(m.group(4).replace(",",".")),
+            "Vl Total": float(m.group(5).replace(",",".")),
+        })
     result["itens"] = itens
     return result, None
 
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
 def db_salvar_ajuste(engine, empresa, filial, num_nf, data_nf, natureza,
                      justificativa, dados, operador, origem="manual", num_ciclo=""):
     if engine is None: return False
@@ -117,6 +97,66 @@ def db_obter_ajustes(engine, empresa, filial, mes=None, ano=None):
         return result
     except Exception as ex:
         st.error(f"Erro ao buscar ajustes: {ex}")
+        return []
+
+
+def db_obter_ajustes_periodo(engine, empresa, filial, mes_de, ano_de, mes_ate, ano_ate):
+    """Busca ajustes manuais em um intervalo de mês/ano."""
+    if engine is None: return []
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT id, num_nf, data_nf, natureza, justificativa,
+                       dados_json, operador, origem, num_ciclo, criado_em
+                FROM inventario_ajustes
+                WHERE empresa=:e AND filial=:f
+                  AND (EXTRACT(YEAR FROM data_nf)*100 + EXTRACT(MONTH FROM data_nf))
+                      BETWEEN :de AND :ate
+                ORDER BY criado_em DESC
+            """), {"e":empresa,"f":filial,
+                   "de":ano_de*100+mes_de,"ate":ano_ate*100+mes_ate}).fetchall()
+        result = []
+        for r in rows:
+            try: dados = json.loads(r[5] or "[]")
+            except: dados = []
+            result.append({
+                "id":r[0],"num_nf":r[1],"data_nf":str(r[2]) if r[2] else "",
+                "natureza":r[3],"justificativa":r[4],"dados":dados,
+                "operador":r[6],"origem":r[7],"num_ciclo":r[8],
+                "criado_em":str(r[9]) if r[9] else "",
+            })
+        return result
+    except Exception as ex:
+        st.error(f"Erro ao buscar ajustes: {ex}")
+        return []
+
+
+def db_obter_ajustes_ciclos_periodo(engine, empresa, filial, mes_de, ano_de, mes_ate, ano_ate):
+    """Busca NFs do cíclico em um intervalo de mês/ano."""
+    if engine is None: return []
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT num_nf, data_nf, natureza, dados_json, num_ciclo, atualizado_em
+                FROM inventario_nf_ajuste
+                WHERE empresa=:e AND filial=:f
+                  AND (EXTRACT(YEAR FROM data_nf)*100 + EXTRACT(MONTH FROM data_nf))
+                      BETWEEN :de AND :ate
+                ORDER BY atualizado_em DESC
+            """), {"e":empresa,"f":filial,
+                   "de":ano_de*100+mes_de,"ate":ano_ate*100+mes_ate}).fetchall()
+        result = []
+        for r in rows:
+            try: dados = json.loads(r[3] or "[]")
+            except: dados = []
+            result.append({
+                "num_nf":r[0],"data_nf":str(r[1]) if r[1] else "",
+                "natureza":r[2],"dados":dados,"num_ciclo":r[4],
+                "origem":"ciclico","justificativa":"Ajuste de inventário",
+                "operador":"—","criado_em":str(r[5]) if r[5] else "",
+            })
+        return result
+    except Exception as ex:
         return []
 
 
@@ -243,25 +283,36 @@ def render(empresa_sel, filial_sel, formatar_br):
         st.markdown("### Relatório Consolidado de Ajustes")
         st.caption("Inclui NFs registradas manualmente e via Inventário Cíclico.")
 
-        # Filtros
-        col_f1, col_f2, col_f3 = st.columns([1, 1, 2])
-        with col_f1:
-            ano_sel = st.selectbox("Ano", list(range(date.today().year, 2023, -1)),
-                                   key="aj_ano")
-        with col_f2:
-            meses = {"Todos": None, "Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,
+        # Filtros de período
+        meses_map = {"Jan":1,"Fev":2,"Mar":3,"Abr":4,"Mai":5,"Jun":6,
                      "Jul":7,"Ago":8,"Set":9,"Out":10,"Nov":11,"Dez":12}
-            mes_label = st.selectbox("Mês", list(meses.keys()), key="aj_mes")
-            mes_sel = meses[mes_label]
-        with col_f3:
+        meses_lista = list(meses_map.keys())
+        anos_lista  = list(range(date.today().year, 2023, -1))
+        mes_atual   = meses_lista[date.today().month - 1]
+
+        st.markdown("**Período:**")
+        col_d1, col_d2, col_a1, col_a2, col_or = st.columns([1,1,1,1,2])
+        with col_d1:
+            mes_de  = st.selectbox("De — Mês", meses_lista, index=0, key="aj_mes_de")
+        with col_d2:
+            ano_de  = st.selectbox("De — Ano", anos_lista, key="aj_ano_de")
+        with col_a1:
+            mes_ate = st.selectbox("Até — Mês", meses_lista,
+                                   index=meses_lista.index(mes_atual), key="aj_mes_ate")
+        with col_a2:
+            ano_ate = st.selectbox("Até — Ano", anos_lista, key="aj_ano_ate")
+        with col_or:
+            st.markdown("<div style='margin-top:26px'></div>", unsafe_allow_html=True)
             origem_sel = st.radio("Origem", ["Todos","Manual","Cíclico"],
                                   horizontal=True, key="aj_origem")
 
         if st.button("🔍 Carregar relatório", type="primary", key="aj_btn_rel"):
-            # Busca ajustes manuais
-            ajustes_manual = db_obter_ajustes(engine, empresa_sel, filial_sel, mes_sel, ano_sel)
-            # Busca NFs do cíclico
-            ajustes_ciclico = db_obter_ajustes_ciclos(engine, empresa_sel, filial_sel, mes_sel, ano_sel)
+            mes_de_n  = meses_map[mes_de]
+            mes_ate_n = meses_map[mes_ate]
+            ajustes_manual  = db_obter_ajustes_periodo(engine, empresa_sel, filial_sel,
+                                                        mes_de_n, ano_de, mes_ate_n, ano_ate)
+            ajustes_ciclico = db_obter_ajustes_ciclos_periodo(engine, empresa_sel, filial_sel,
+                                                               mes_de_n, ano_de, mes_ate_n, ano_ate)
 
             # Filtra por origem
             if origem_sel == "Manual":
@@ -318,7 +369,7 @@ def render(empresa_sel, filial_sel, formatar_br):
                         df.to_excel(w, index=False, sheet_name="Ajustes")
                     return buf.getvalue()
 
-                periodo = f"{mes_label}_{ano_sel}" if mes_sel else str(ano_sel)
+                periodo = f"{mes_de}{ano_de}_a_{mes_ate}{ano_ate}"
                 st.download_button(
                     "📥 Exportar Excel",
                     data=_to_excel(df_rel),
