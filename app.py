@@ -114,9 +114,6 @@ def preparar_view(df):
 with st.sidebar:
     st.markdown('<div style="color:#EC6E21;font-weight:700;font-size:1.1rem;margin-bottom:12px;">⚙️ Atualizar Bases</div>', unsafe_allow_html=True)
     
-    if MODO_DEV:
-        st.warning("🛠️ MODO DESENVOLVIMENTO ATIVO")
-        st.caption("Conectado a: auditoria_i9_TESTE.db")
 
     with st.expander("1. Auditoria"):
         u_wms = st.file_uploader("WMS", type=["xlsx"], key="up_wms")
