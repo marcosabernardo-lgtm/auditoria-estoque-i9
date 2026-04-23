@@ -864,7 +864,24 @@ def render(df_jlle, df_outras, formatar_br):
             df_lista = df_score[df_score["Produto"].astype(str).str.zfill(6).isin(prods_salvos)].copy()
             qtd_ciclo = len(df_lista)
         else:
+            # ── SELEÇÃO MANUAL ─────────────────────────────
+        with st.expander("✍️ Seleção manual de produtos"):
+            entrada_manual = st.text_area("Cole os códigos (separados por espaço, vírgula ou linha)")
+
+        codigos_manuais = [
+            c.strip().zfill(6)
+            for c in entrada_manual.replace(",", " ").split()
+            if c.strip()
+        ]
+
+        if codigos_manuais:
+            df_lista = df_score[
+                df_score["Produto"].astype(str).str.zfill(6).isin(codigos_manuais)
+            ].copy()
+            qtd_ciclo = len(df_lista)
+        else:
             modo = st.radio("Modo", ["Quantidade fixa","Percentual"], horizontal=True, key="ic_modo")
+
             if modo == "Quantidade fixa":
                 st.session_state.setdefault("ic_qtd", 30)
                 qtd_ciclo = min(st.session_state.ic_qtd, total_skus)
@@ -872,7 +889,7 @@ def render(df_jlle, df_outras, formatar_br):
                 pmap = {"5%":0.05,"10%":0.10,"20%":0.20,"30%":0.30}
                 pl   = st.select_slider("Faixa",list(pmap.keys()),value="10%",key="ic_pct")
                 qtd_ciclo = max(1,int(total_skus*pmap[pl]))
-            
+
             df_lista = montar_lista(df_score, qtd_ciclo, contados)
 
         st.markdown(f"**{len(df_lista)} itens na lista**")
