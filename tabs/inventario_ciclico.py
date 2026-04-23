@@ -221,8 +221,13 @@ def montar_df_relatorio(uploads, df_filial):
     rows = []
     for u in uploads:
         dados = u.get("dados", [])
-        if isinstance(dados, list):
+        if isinstance(dados, list) and dados:
             rows.extend(dados)
+            continue
+
+        df_rows = u.get("df_rows", [])
+        if isinstance(df_rows, list) and df_rows:
+            rows.extend(df_rows)
     if not rows:
         return pd.DataFrame()
 
@@ -236,6 +241,10 @@ def montar_df_relatorio(uploads, df_filial):
         df_wms_all = df_wms_all.rename(columns={"Qtd WMS": "Saldo WMS"})
     if "Invent WMS" not in df_wms_all.columns and "Qtd ERP" in df_wms_all.columns:
         df_wms_all = df_wms_all.rename(columns={"Qtd ERP": "Invent WMS"})
+    if "Saldo WMS" not in df_wms_all.columns and "Qtd Antes" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Qtd Antes": "Saldo WMS"})
+    if "Invent WMS" not in df_wms_all.columns and "Qtd Depois" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Qtd Depois": "Invent WMS"})
 
     for col in ["Saldo WMS", "Invent WMS"]:
         if col in df_wms_all.columns:
@@ -270,6 +279,15 @@ def montar_df_relatorio(uploads, df_filial):
         "Vl Total ERP","Vl Total Diferença"
     ] if c in df_rel.columns]
     return df_rel[cols_saida].sort_values("Vl Total ERP", ascending=False).reset_index(drop=True)
+
+
+def gerar_pdf_kpmg(ciclo, df_rel, empresa, filial):
+    return gerar_pdf_kpmg_consolidado(
+        [ciclo],
+        {ciclo.get("num_ciclo", ""): df_rel},
+        empresa,
+        filial,
+    )
 
 
 def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
