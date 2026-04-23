@@ -65,7 +65,7 @@ def estilizar_tabela(df):
 
 def get_engine():
     if MODO_DEV:
-        return create_engine("sqlite:///auditoria_i9_TESTE.db")
+        return create_engine("sqlite:///auditoria_i9_TESTE")
     try:
         from sqlalchemy.pool import NullPool
         url = st.secrets["connections"]["postgresql"]["url"]

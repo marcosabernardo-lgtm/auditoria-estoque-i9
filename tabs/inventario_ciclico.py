@@ -667,30 +667,46 @@ def render(df_jlle, df_outras, formatar_br):
         st.subheader("1. Geração da Lista de Contagem")
         df_score = calcular_score_turbo(df_jlle, tuple(sorted(data["contados"].items())))
         
+        # ── SELEÇÃO MANUAL SEM DEPENDER DE ELSE ─────────────────────────
+        with st.expander("⚙️ Seleção Manual"):
+            entrada_manual = st.text_area("Insira os códigos dos produtos")
+            codigos_manuais = [
+                c.strip().zfill(6)
+                for c in entrada_manual.replace(",", " ").split()
+                if c.strip()
+            ]
+        
         if ciclo_ativo:
             st.warning(f"⚠️ Ciclo Ativo: **{ciclo_ativo['num_ciclo']}**")
+        
+        # PRIORIDADE: manual
+        if codigos_manuais:
+            df_lista = df_score[
+                df_score["Produto"].astype(str).str.zfill(6).isin(codigos_manuais)
+            ].copy()
+        
+        elif ciclo_ativo:
             prods_fixos = [str(p).zfill(6) for p in ciclo_ativo.get("produtos_lista", [])]
-            df_lista = df_score[df_score["Produto"].astype(str).str.zfill(6).isin(prods_fixos)].copy()
-            st.info("💡 Lista congelada conforme o banco de dados.")
-            if st.button("Avançar para Etapa 2 ➡️", type="primary"):
-                st.session_state["ic_etapa_nav"] = 2
-                st.rerun()
+            df_lista = df_score[
+                df_score["Produto"].astype(str).str.zfill(6).isin(prods_fixos)
+            ].copy()
+        
         else:
-            with st.expander("⚙️ Seleção Manual"):
-                entrada_manual = st.text_area("Insira os códigos dos produtos")
-                codigos_manuais = [c.strip().zfill(6) for c in entrada_manual.replace(",", " ").split() if c.strip()]
-            
-            if codigos_manuais:
-                df_lista = df_score[df_score["Produto"].astype(str).str.zfill(6).isin(codigos_manuais)].copy()
+            armazens = sorted(df_score["Armazem"].unique().tolist()) if "Armazem" in df_score.columns else []
+            arm_sel = st.multiselect("🏭 Armazéns", armazens, default=armazens)
+            df_f = df_score[df_score["Armazem"].isin(arm_sel)] if arm_sel else df_score
+        
+            c1, c2 = st.columns([2,1])
+            modo = c1.radio("Modo", ["Quantidade fixa", "Percentual"], horizontal=True)
+        
+            if modo == "Quantidade fixa":
+                qtd = c2.number_input("Qtd", 5, 200, 30)
             else:
-                armazens = sorted(df_score["Armazem"].unique().tolist()) if "Armazem" in df_score.columns else []
-                arm_sel = st.multiselect("🏭 Armazéns", armazens, default=armazens)
-                df_f = df_score[df_score["Armazem"].isin(arm_sel)] if arm_sel else df_score
-                c1, c2 = st.columns([2,1])
-                modo = c1.radio("Modo", ["Quantidade fixa", "Percentual"], horizontal=True)
-                qtd = c2.number_input("Qtd", 5, 200, 30) if modo == "Quantidade fixa" else max(1, int(len(df_f) * c2.select_slider("%", [5, 10, 20], value=10) / 100))
-                df_lista = df_f.head(qtd).copy()
-
+                pct = c2.select_slider("%", [5, 10, 20], value=10)
+                qtd = max(1, int(len(df_f) * pct / 100))
+        
+            df_lista = df_f.head(qtd).copy()
+        
         st.dataframe(df_lista[["Produto", "Descrição", "Curva ABC", "Já Contado", "Score"]], use_container_width=True, hide_index=True)
         if not ciclo_ativo:
             if st.button("🚀 Iniciar Ciclo", type="primary", use_container_width=True):
