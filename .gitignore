@@ -1,6 +1,14 @@
 /auditoria_estoque_i9.xlsx
 /auditoria_i9.db
+/auditoria_i9
+/auditoria_i9-wal
+/auditoria_i9-shm
+/auditoria_i9_TESTE
+/auditoria_i9_TESTE-wal
+/auditoria_i9_TESTE-shm
 /auditoria_i9.xlsx
 /chaves.txt
 /upload
-/__pycache__
+__pycache__/
+*.pyc
+*.pyo

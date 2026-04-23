@@ -1,282 +1,360 @@
 import streamlit as st
-from collections import defaultdict
 import pandas as pd
 import numpy as np
 import io
+import re
 import json
+import pdfplumber
+from collections import defaultdict
 from datetime import date, datetime
-from sqlalchemy import text
+from sqlalchemy import text 
+from fpdf import FPDF
+
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
+                                Paragraph, Spacer, HRFlowable, PageBreak)
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+
+from inventario_db import (
+    db_salvar_ciclo_ativo, db_fechar_ciclo_ativo, db_carregar_tudo,
+    db_salvar_erp_upload, db_marcar_contados, db_remover_erp_uploads,
+    db_cancelar_ciclo_ativo,
+    db_salvar_justificativas, db_salvar_nf_ajuste,
+    db_obter_nf_ajustes, db_obter_justificativas,
+    db_gerar_num_ciclo
+)
 
 PERIODO_KPMG_DIAS = 365
 
-try:
-    from inventario_db import (
-        db_obter_contados, db_marcar_contados, db_resetar_contados,
-        db_obter_ciclos, db_gravar_ciclo, db_resetar_ciclos,
-        db_obter_ciclo_ativo, db_salvar_ciclo_ativo,
-        db_acumular_upload, db_fechar_ciclo_ativo, db_resetar_tudo,
-        db_obter_justificativas, db_salvar_justificativas,
-        db_obter_erp_upload, db_obter_erp_uploads, db_salvar_erp_upload,
-        db_obter_nf_ajustes, db_salvar_nf_ajuste,
-        db_obter_documentos_conferidos, db_carregar_tudo,
-    )
-    DB_DISPONIVEL = True
-except ImportError:
-    DB_DISPONIVEL = False
+def _resetar_estado_ciclo(cache_key: str):
+    """Limpa o estado de sessão do inventário cíclico antes de iniciar um novo ciclo."""
+    for chave in list(st.session_state.keys()):
+        if chave.startswith("ic_"):
+            st.session_state.pop(chave, None)
+    st.session_state.pop(cache_key, None)
+    st.session_state["ic_force_reload"] = True
 
 
+def _pdf_para_bytes(pdf: FPDF) -> bytes:
+    try:
+        resultado = pdf.output(dest="S")
+        if isinstance(resultado, str):
+            return resultado.encode("latin-1")
+        return bytes(resultado)
+    except TypeError:
+        resultado = pdf.output()
+        if isinstance(resultado, (bytes, bytearray)):
+            return bytes(resultado)
+        return resultado.encode("latin-1")
+
+class KPMG_Report(FPDF):
+    def header(self):
+        self.set_font("Helvetica", "B", 10)
+        self.set_text_color(0, 85, 98) 
+        title = "RELATÓRIO DE AUDITORIA DE ESTOQUE - PADRÃO KPMG".encode('latin-1', 'replace').decode('latin-1')
+        self.cell(0, 10, title, 0, 1, "R")
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(128, 128, 128)
+        info = f"Página {self.page_no()} | Gerado via Portal I9 em {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        self.cell(0, 10, info.encode('latin-1', 'replace').decode('latin-1'), 0, 0, "C")
+
+    def capa_resumo(self, metrics):
+        self.add_page()
+        self.set_font("Helvetica", "B", 22)
+        self.set_text_color(0, 51, 102)
+        self.ln(20)
+        self.cell(0, 15, "RESUMO EXECUTIVO".encode('latin-1', 'replace').decode('latin-1'), 0, 1, "L")
+        self.set_draw_color(0, 85, 98)
+        self.line(10, 48, 200, 48)
+        self.ln(10)
+        items = [
+            ("SKUs Contados", metrics['skus']),
+            ("Cobertura KPMG", f"{metrics['cobertura']:.2f}%"),
+            ("Acuracidade Média", f"{metrics['acuracidade']:.2f}%"),
+            ("Ciclos Realizados", metrics['ciclos']),
+            ("Status de Conformidade", metrics['status'])
+        ]
+        for label, val in items:
+            self.set_font("Helvetica", "B", 12)
+            self.set_text_color(0, 0, 0)
+            self.cell(60, 12, label.encode('latin-1', 'replace').decode('latin-1') + ":", 0, 0)
+            self.set_font("Helvetica", "", 12)
+            if label == "Status de Conformidade":
+                color = (39, 174, 96) if val == "CUMPRIDA" else (231, 76, 60)
+                self.set_text_color(*color)
+                self.set_font("Helvetica", "B", 12)
+            self.cell(0, 12, str(val).encode('latin-1', 'replace').decode('latin-1'), 0, 1)
+
+    def lista_ciclos_page(self, df_ciclos):
+        self.add_page()
+        self.set_font("Helvetica", "B", 16)
+        self.set_text_color(0, 51, 102)
+        self.cell(0, 10, "4.2 LISTA DE CICLOS", 0, 1, "L")
+        self.ln(5)
+        self.set_font("Helvetica", "B", 8)
+        self.set_fill_color(240, 240, 240)
+        self.set_text_color(0, 0, 0)
+        cols = ["Nº Ciclo", "Data", "Responsável", "Nº Inv", "SKUs", "Div.", "Cobert.", "Acurácia"]
+        w = [35, 25, 30, 20, 20, 20, 20, 20]
+        for i, col in enumerate(cols):
+            self.cell(w[i], 8, col.encode('latin-1', 'replace').decode('latin-1'), 1, 0, "C", True)
+        self.ln()
+        self.set_font("Helvetica", "", 8)
+        for _, row in df_ciclos.iterrows():
+            self.cell(w[0], 7, str(row['Nº Ciclo']).encode('latin-1', 'replace').decode('latin-1'), 1)
+            self.cell(w[1], 7, str(row['Data']).encode('latin-1', 'replace').decode('latin-1'), 1, 0, "C")
+            self.cell(w[2], 7, str(row['Responsável']).encode('latin-1', 'replace').decode('latin-1'), 1)
+            self.cell(w[3], 7, str(row['Nº Inv']).encode('latin-1', 'replace').decode('latin-1'), 1, 0, "C")
+            self.cell(w[4], 7, str(row['SKUs']), 1, 0, "C")
+            self.cell(w[5], 7, str(row['Div']), 1, 0, "C")
+            self.cell(w[6], 7, f"{row['Cobert']}%", 1, 0, "C")
+            self.cell(w[7], 7, f"{row['Acuracia']}%", 1, 0, "C")
+            self.ln()
+
+    def detalhe_ciclo_page(self, df_itens):
+        self.add_page(orientation="L") 
+        self.set_font("Helvetica", "B", 14)
+        self.set_text_color(0, 51, 102)
+        self.cell(0, 10, "4.3 DETALHAMENTO DE PRODUTOS POR CICLO".encode('latin-1', 'replace').decode('latin-1'), 0, 1, "L")
+        self.ln(5)
+        self.set_font("Helvetica", "B", 7)
+        self.set_fill_color(0, 85, 98)
+        self.set_text_color(255, 255, 255)
+        cols = ["Código", "Descrição", "Saldo ERP", "Saldo WMS", "Inventariado", "Diferença", "Vl Total ERP", "Vl Total Dif", "Justificativa", "NF"]
+        w = [15, 65, 15, 15, 15, 15, 22, 22, 60, 20]
+        for i, col in enumerate(cols):
+            self.cell(w[i], 8, col.encode('latin-1', 'replace').decode('latin-1'), 1, 0, "C", True)
+        self.ln()
+        self.set_font("Helvetica", "", 7)
+        self.set_text_color(0, 0, 0)
+        for _, row in df_itens.iterrows():
+            vl_erp = float(row['Vl Total ERP']) if pd.notna(row['Vl Total ERP']) else 0.0
+            vl_dif = float(row['Vl Total Dif']) if pd.notna(row['Vl Total Dif']) else 0.0
+            self.cell(w[0], 6, str(row['Codigo']), 1)
+            self.cell(w[1], 6, str(row['Descricao']).encode('latin-1', 'replace').decode('latin-1')[:45], 1)
+            self.cell(w[2], 6, str(row['Saldo ERP']), 1, 0, "R")
+            self.cell(w[3], 6, str(row['Saldo WMS']), 1, 0, "R")
+            self.cell(w[4], 6, str(row['Inventariado']), 1, 0, "R")
+            self.cell(w[5], 6, str(row['Diferenca']), 1, 0, "R")
+            self.cell(w[6], 6, f"{vl_erp:,.2f}", 1, 0, "R")
+            self.cell(w[7], 6, f"{vl_dif:,.2f}", 1, 0, "R")
+            just = str(row['Justificativa']).encode('latin-1', 'replace').decode('latin-1')
+            self.cell(w[8], 6, just, 1)
+            self.cell(w[9], 6, str(row['NF']), 1, 0, "C")
+            self.ln()
+
+# ── PARSER DANFE ────────────────────────────────────────────────────────────
 def parsear_nf_danfe(arquivo_bytes):
-    """Extrai dados da NF-e DANFE (formato Alltech/TOTVS Protheus) via pdfplumber."""
-    import re as _re, io as _io
     result = {"num_nf":"","data":"","natureza":"","itens":[]}
     try:
-        import pdfplumber
-        with pdfplumber.open(_io.BytesIO(arquivo_bytes)) as pdf:
-            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+        with pdfplumber.open(io.BytesIO(arquivo_bytes)) as pdf:
+            text_pdf = "\n".join(p.extract_text() or "" for p in pdf.pages)
     except Exception as e:
         return result, str(e)
-
-    def _br_float(s):
-        """Converte número BR com ponto de milhar (1.989,10) para float."""
-        s = str(s).strip()
-        if "," in s:
-            s = s.replace(".", "").replace(",", ".")
-        return float(s)
-
-    nums = _re.findall(r'N\.\s*0*(\d+)', text)
-    if nums: result["num_nf"] = nums[0].zfill(9)
-
-    m = _re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text)
-    if m:
-        result["data"] = m.group(1)
-    else:
-        m = _re.search(r'(\d{2}/\d{2}/\d{4})\s+\d{2}:\d{2}:\d{2}', text)
-        if m: result["data"] = m.group(1)
-
-    m = _re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text)
-    if m:
-        result["natureza"] = m.group(1).strip()
-    else:
-        m = _re.search(r'(BAIXA [A-Z]+|VENDA|TRANSFERENCIA|AJUSTE DE INVENTARIO)', text)
-        if m: result["natureza"] = m.group(1)
-
-    itens = []
-    padrao = _re.compile(
-        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+'
-        r'([\d,]+)\s+([\d.,]+)\s+([\d.,]+)',
-        _re.MULTILINE)
-    for m in padrao.finditer(text):
-        try:
-            itens.append({
-                "Codigo":   m.group(1),
-                "Descricao":m.group(2).strip(),
-                "Qtd":      _br_float(m.group(3)),
-                "Vl Unit":  _br_float(m.group(4)),
-                "Vl Total": _br_float(m.group(5)),
-            })
-        except:
-            pass
-    result["itens"] = itens
+    nums = re.findall(r'N\.\s*0*(\d+)', text_pdf)
+    if nums: result["num_nf"] = nums[0].lstrip('0')
+    m_data = re.search(r'DATA DE EMISS[ÃA]O\s*\n?\s*(\d{2}/\d{2}/\d{4})', text_pdf)
+    if m_data: result["data"] = m_data.group(1)
+    m_nat = re.search(r'NATUREZA DA OPERA[ÇC][ÃA]O\s*\n\s*(.+?)(?:\s+PROTOCOLO|\n)', text_pdf)
+    if m_nat: result["natureza"] = m_nat.group(1).strip()
+    padrao = re.compile(r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)', re.MULTILINE)
+    for m in padrao.finditer(text_pdf):
+        result["itens"].append({
+            "Codigo": m.group(1), "Descricao": m.group(2).strip(),
+            "Qtd": float(m.group(3).replace(".","").replace(",",".")),
+            "Vl Unit": float(m.group(4).replace(".","").replace(",",".")),
+            "Vl Total": float(m.group(5).replace(".","").replace(",",".")),
+        })
     return result, None
 
-def processar_resultado_wms(arquivo):
-    xls     = pd.ExcelFile(arquivo)
-    df_meta = pd.read_excel(xls, sheet_name=xls.sheet_names[0], header=None, nrows=7)
-    meta    = {}
-    for _, row in df_meta.iterrows():
-        chave = str(row.iloc[0]).strip().replace(":", "")
-        valor = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-        if "mero" in chave or "Numero" in chave: meta["num_inv"]      = valor
-        elif "Data" in chave:                     meta["data"]         = valor
-        elif "onsav" in chave or "espons" in chave: meta["responsavel"] = valor
-        elif "curac" in chave:                    meta["acuracidade"]  = valor
-    df = pd.read_excel(xls, sheet_name=xls.sheet_names[0], skiprows=8, header=0)
-    df.columns = ["Produto","Qtd Antes","Vl Antes","Qtd Depois","Vl Depois","Qtd Diferença","Vl Diferença","Acuracidade"]
-    df = df.dropna(subset=["Produto"])
-    df = df[df["Produto"].astype(str).str.strip() != ""]
-    df["Codigo"]    = df["Produto"].astype(str).str.split(" - ", n=1).str[0].str.strip().str.zfill(6)
-    df["Descricao"] = df["Produto"].astype(str).str.split(" - ", n=1).str[1].str.strip().fillna("")
-    for col in ["Qtd Antes","Qtd Depois","Qtd Diferença"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    try:    meta["data_iso"] = datetime.strptime(meta.get("data",""), "%d/%m/%Y").date().isoformat()
-    except: meta["data_iso"] = date.today().isoformat()
-    meta["df"] = df; meta["produtos"] = df["Codigo"].tolist()
-    return meta
+# ── COMPONENTES VISUAIS E SCORE ─────────────────────────────────────────────
+def _card(col, num, titulo, ativo, concluido, chave):
+    if concluido:
+        brd, bg, icon, badge, bbg, txt = ("#27AE60", "#E8F5E9", "✓", "Concluído", "#27AE60", "#1E5631")
+    elif ativo:
+        brd, bg, icon, badge, bbg, txt = ("#005562", "#E1F5EE", str(num), "Ativo", "#005562", "#00333d")
+    else:
+        brd, bg, icon, badge, bbg, txt = ("#D1D1D1", "#F9F9F9", str(num), "Pendente", "#777", "#555")
+    with col:
+        st.markdown(f"""
+            <div style="border:2px solid {brd}; border-radius:12px; padding:12px; background:{bg}; min-height:100px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div style="width:28px; height:28px; border-radius:50%; background:{brd}; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:bold;">{icon}</div>
+                    <span style="background:{bbg}; color:#fff; font-size:10px; padding:2px 8px; border-radius:10px; font-weight:bold;">{badge}</span>
+                </div>
+                <div style="color:{txt}; font-weight:800; font-size:14px; margin-top:10px; text-transform:uppercase;">{titulo}</div>
+            </div>
+        """, unsafe_allow_html=True)
+        return st.button(f"Abrir Etapa {num}", key=chave, use_container_width=True)
 
-
-@st.cache_data(ttl=300, show_spinner=False)
-def calcular_score(df, contados_tuple):
+@st.cache_data(ttl=600)
+def calcular_score_turbo(df, contados_tuple):
     contados = dict(contados_tuple)
     df = df.copy()
-    for col in ["Saldo ERP (Total)","Saldo WMS","Vl Unit","Vl Total ERP","Divergência"]:
+    for col in ["Saldo WMS", "Saldo ERP (Total)", "Vl Unit", "Vl Total ERP"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    chave_arm = [c for c in ["Produto","Armazem"] if c in df.columns]
+
+    if "Produto" in df.columns:
+        df["Produto"] = df["Produto"].astype(str).str.zfill(6)
+
+    desc_cols = [c for c in df.columns if "Descr" in str(c)]
+    desc_col = desc_cols[0] if desc_cols else None
+    if desc_col and desc_col != "Descrição":
+        df = df.rename(columns={desc_col: "Descrição"})
+        desc_col = "Descrição"
+
     if "Produto" in df.columns and len(df) > df["Produto"].nunique():
-        cols_soma_wms  = [c for c in ["Saldo WMS"] if c in df.columns]
-        cols_fixos_arm = [c for c in ["Produto","Armazem","Descricao","Descricão","Descrição","Empresa","Filial","Saldo ERP (Total)","Vl Unit","Vl Total ERP"] if c in df.columns]
-        df_w = df.groupby(chave_arm, as_index=False)[cols_soma_wms].sum() if cols_soma_wms else df[chave_arm].drop_duplicates()
-        df_f = df[cols_fixos_arm].drop_duplicates(subset=chave_arm, keep="first")
-        df_a = df_f.merge(df_w, on=chave_arm, how="left")
-        df_a["Divergência"] = df_a["Saldo ERP (Total)"] - df_a["Saldo WMS"]
-        cols_sp = [c for c in ["Saldo WMS","Saldo ERP (Total)","Divergência","Vl Total ERP"] if c in df_a.columns]
-        cols_fp = [c for c in ["Produto","Descrição","Empresa","Filial","Vl Unit"] if c in df_a.columns]
-        df = df_a[cols_fp].drop_duplicates(subset=["Produto"], keep="first").merge(
-             df_a.groupby("Produto", as_index=False)[cols_sp].sum(), on="Produto", how="left")
+        agg_map = {}
+        if desc_col:
+            agg_map[desc_col] = (desc_col, "first")
+        if "Armazem" in df.columns:
+            agg_map["Armazem"] = ("Armazem", "first")
+        if "Saldo WMS" in df.columns:
+            agg_map["Saldo WMS"] = ("Saldo WMS", "sum")
+        if "Saldo ERP (Total)" in df.columns:
+            agg_map["Saldo ERP (Total)"] = ("Saldo ERP (Total)", "max")
+        if "Vl Unit" in df.columns:
+            agg_map["Vl Unit"] = ("Vl Unit", "first")
+        if "Vl Total ERP" in df.columns:
+            agg_map["Vl Total ERP"] = ("Vl Total ERP", "max")
+
+        df = df.groupby("Produto", as_index=False).agg(**agg_map)
+
     df = df.sort_values("Vl Total ERP", ascending=False).reset_index(drop=True)
     tv = df["Vl Total ERP"].sum()
     df["pct_acum"]  = df["Vl Total ERP"].cumsum() / tv if tv > 0 else 0
     df["Curva ABC"] = np.where(df["pct_acum"]<=0.80,"A", np.where(df["pct_acum"]<=0.95,"B","C"))
-    df["score_abc"] = df["Curva ABC"].map({"A":10,"B":6,"C":3})
-    df["score_diverg"] = np.where(df["Divergência"]!=0, 10, 0)
-    mv = df["Vl Total ERP"].max() or 1
-    df["score_valor"] = (df["Vl Total ERP"]/mv*10).round(2)
     hoje = date.today()
-    def dias(p):
-        if str(p) in contados:
-            try: return (hoje - date.fromisoformat(contados[str(p)])).days
-            except: return PERIODO_KPMG_DIAS
-        return PERIODO_KPMG_DIAS
-    df["Dias s/ Contagem"] = df["Produto"].astype(str).apply(dias)
-    md = df["Dias s/ Contagem"].max() or 1
-    df["score_dias"] = (df["Dias s/ Contagem"]/md*10).round(2)
-    raw = 0.30*df["score_abc"] + 0.25*df["score_diverg"] + 0.25*df["score_valor"] + 0.20*df["score_dias"]
-    df["Score"] = (raw/(raw.max() or 1)*10).round(2)
+    df["Dias s/ Contagem"] = df["Produto"].astype(str).apply(lambda p: (hoje - date.fromisoformat(contados[p])).days if p in contados else PERIODO_KPMG_DIAS)
+    df["Score"] = (df["Dias s/ Contagem"] / PERIODO_KPMG_DIAS * 10).round(2)
     df["Já Contado"] = df["Produto"].astype(str).apply(lambda p: f"✅ {contados[p]}" if p in contados else "⬜ Não")
+
     def motivo(r):
         rs = []
-        if r["Curva ABC"]=="A": rs.append("Curva A")
-        if r["Divergência"]!=0: rs.append("Divergência")
-        if r["Dias s/ Contagem"]>=PERIODO_KPMG_DIAS: rs.append("Nunca contado")
-        elif r["Dias s/ Contagem"]>180: rs.append(f"{r['Dias s/ Contagem']}d sem contar")
-        if r["Vl Total ERP"]>0: rs.append(f"R$ {r['Vl Total ERP']:,.0f}")
+        if r["Curva ABC"] == "A":
+            rs.append("Curva A")
+        if r.get("Status", "") == "Divergente":
+            rs.append("Divergência")
+        if r["Dias s/ Contagem"] >= PERIODO_KPMG_DIAS:
+            rs.append("Nunca contado")
+        elif r["Dias s/ Contagem"] > 180:
+            rs.append(f"{r['Dias s/ Contagem']}d sem contar")
+        if r["Vl Total ERP"] > 0:
+            rs.append(f"R$ {r['Vl Total ERP']:,.0f}")
         return " · ".join(rs) if rs else "Em estoque"
+
     df["Motivo"] = df.apply(motivo, axis=1)
     df = df.sort_values("Score", ascending=False).reset_index(drop=True)
-    df.index = df.index + 1
     return df
 
-
-def montar_lista(df_score, qtd, contados):
-    nao_cont = set(df_score[~df_score["Produto"].astype(str).isin(contados)]["Produto"].astype(str))
-    top = df_score.head(qtd).copy()
-    top["Origem"] = top["Produto"].astype(str).apply(
-        lambda p: "⬜ Cobertura KPMG" if p in nao_cont else "🔴 Alta prioridade")
-    ja    = set(top["Produto"].astype(str))
-    vagas = qtd - len(top)
-    if vagas > 0:
-        extras = df_score[df_score["Produto"].astype(str).isin(nao_cont) &
-                          ~df_score["Produto"].astype(str).isin(ja)].head(vagas).copy()
-        if not extras.empty:
-            extras["Origem"] = "⬜ Cobertura KPMG"
-            top = pd.concat([top, extras], ignore_index=True)
-    top = top.reset_index(drop=True); top.index = top.index + 1
-    return top
-
-
-def gerar_xlsx_lista(df, label=""):
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="xlsxwriter") as w:
-        df.to_excel(w, index=True, index_label="Ranking", sheet_name="Lista")
-        wb, ws = w.book, w.sheets["Lista"]
-        fh = wb.add_format({"bold":True,"bg_color":"#004550","font_color":"#FFFFFF","border":1})
-        for i,c in enumerate(["Ranking"]+list(df.columns)):
-            ws.write(0,i,c,fh); ws.set_column(i,i,max(len(str(c))+4,14))
-    out.seek(0); return out.getvalue()
-
-
-def gerar_xlsx_historico(ciclos, label):
-    if not ciclos: return b""
-    df  = pd.DataFrame([{"Nº Ciclo":c.get("num_ciclo","—"),"Data Geração":c.get("data_geracao","—"),
-             "Data Contagem":c.get("data","—"),"Responsável":c.get("responsavel","—"),
-             "Acuracidade":c.get("acuracidade","—"),"SKUs Lista":c.get("qtd_lista",0),
-             "SKUs Contados":c.get("qtd_contados",0),"Cobertura %":f"{c.get('cobertura_pct',0):.1f}%",
-             "Status":c.get("status","—")} for c in ciclos])
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="xlsxwriter") as w:
-        df.to_excel(w, index=False, sheet_name="Histórico KPMG")
-    out.seek(0); return out.getvalue()
-
+# ── FUNÇÕES DO RELATÓRIO FINAL (PADRÃO MAIN) ─────────────────────────────────
 
 def montar_df_relatorio(uploads, df_filial):
     if not uploads or df_filial is None or df_filial.empty:
         return pd.DataFrame()
 
-    erp_cols = [c for c in ["Produto","Descrição","Saldo ERP (Total)","Vl Unit","Vl Total ERP"] if c in df_filial.columns]
+    desc_col = next((c for c in df_filial.columns if "Descr" in str(c)), None)
+    erp_cols = [c for c in ["Produto", "Vl Unit"] if c in df_filial.columns]
+    if desc_col:
+        erp_cols.insert(1, desc_col)
+
     df_erp = df_filial[erp_cols].copy()
-    for col in ["Saldo ERP (Total)","Vl Unit","Vl Total ERP"]:
-        if col in df_erp.columns:
-            df_erp[col] = pd.to_numeric(df_erp[col], errors="coerce").fillna(0)
+    if "Vl Unit" in df_erp.columns:
+        df_erp["Vl Unit"] = pd.to_numeric(df_erp["Vl Unit"], errors="coerce").fillna(0)
     df_erp["Produto"] = df_erp["Produto"].astype(str).str.zfill(6)
-    df_erp = df_erp.groupby("Produto", as_index=False).agg(
-        Descrição=("Descrição","first") if "Descrição" in df_erp.columns else ("Produto","first"),
-        **{"Saldo ERP (Total)": ("Saldo ERP (Total)","sum")} if "Saldo ERP (Total)" in df_erp.columns else {},
-        **{"Vl Unit": ("Vl Unit","first")} if "Vl Unit" in df_erp.columns else {},
-        **{"Vl Total ERP": ("Vl Total ERP","sum")} if "Vl Total ERP" in df_erp.columns else {},
-    )
+
+    agg_map = {}
+    if desc_col:
+        agg_map[desc_col] = (desc_col, "first")
+    if "Vl Unit" in df_erp.columns:
+        agg_map["Vl Unit"] = ("Vl Unit", "first")
+    df_erp = df_erp.groupby("Produto", as_index=False).agg(**agg_map)
+    if desc_col and desc_col != "Descrição":
+        df_erp = df_erp.rename(columns={desc_col: "Descrição"})
 
     rows = []
     for u in uploads:
-        df_u = u.get("df_rows")
-        if df_u:
-            for r in df_u:
-                rows.append(r)
+        dados = u.get("dados", [])
+        if isinstance(dados, list) and dados:
+            rows.extend(dados)
+            continue
+
+        df_rows = u.get("df_rows", [])
+        if isinstance(df_rows, list) and df_rows:
+            rows.extend(df_rows)
     if not rows:
         return pd.DataFrame()
 
     df_wms_all = pd.DataFrame(rows)
+    if "Codigo" not in df_wms_all.columns and "Código" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Código": "Codigo"})
     df_wms_all["Codigo"] = df_wms_all["Codigo"].astype(str).str.zfill(6)
+
+    if "Saldo WMS" not in df_wms_all.columns and "Qtd WMS" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Qtd WMS": "Saldo WMS"})
+    if "Saldo ERP (Total)" not in df_wms_all.columns and "Qtd ERP" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Qtd ERP": "Saldo ERP (Total)"})
     if "Saldo WMS" not in df_wms_all.columns and "Qtd Antes" in df_wms_all.columns:
-        df_wms_all = df_wms_all.rename(columns={"Qtd Antes":"Saldo WMS","Qtd Depois":"Invent WMS"})
-    for col in ["Saldo WMS","Invent WMS"]:
+        df_wms_all = df_wms_all.rename(columns={"Qtd Antes": "Saldo WMS"})
+    if "Saldo ERP (Total)" not in df_wms_all.columns and "Qtd Depois" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Qtd Depois": "Saldo ERP (Total)"})
+    if "Diferença Invent" not in df_wms_all.columns and "Divergencia Qtd" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Divergencia Qtd": "Diferença Invent"})
+    if "Vl Total Diferença" not in df_wms_all.columns and "Divergencia Valor" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Divergencia Valor": "Vl Total Diferença"})
+    if "Vl Total Diferença" not in df_wms_all.columns and "Diferenca Valor" in df_wms_all.columns:
+        df_wms_all = df_wms_all.rename(columns={"Diferenca Valor": "Vl Total Diferença"})
+
+    for col in ["Saldo ERP (Total)", "Saldo WMS", "Diferença Invent", "Vl Total Diferença"]:
         if col in df_wms_all.columns:
             df_wms_all[col] = pd.to_numeric(df_wms_all[col], errors="coerce").fillna(0)
-    df_wms_ult = df_wms_all.drop_duplicates(subset=["Codigo"], keep="last")
 
-    merge_cols = ["Codigo"] + [c for c in ["Saldo WMS","Invent WMS","Acuracidade"] if c in df_wms_ult.columns]
-    df_rel = df_erp.merge(
-        df_wms_ult[merge_cols].rename(columns={"Codigo":"Produto"}),
+    df_wms_ult = df_wms_all.drop_duplicates(subset=["Codigo"], keep="last")
+    merge_cols = ["Codigo"] + [c for c in ["Saldo ERP (Total)", "Saldo WMS", "Diferença Invent", "Vl Total Diferença", "Acuracidade"] if c in df_wms_ult.columns]
+
+    df_rel = df_wms_ult[merge_cols].rename(columns={"Codigo": "Produto"}).merge(
+        df_erp,
         on="Produto", how="left"
     )
-    df_rel["Saldo WMS"]   = df_rel.get("Saldo WMS",  pd.Series(0, index=df_rel.index)).fillna(0)
-    df_rel["Invent WMS"]  = df_rel.get("Invent WMS", pd.Series(0, index=df_rel.index)).fillna(0)
-    df_rel["Acuracidade"] = df_rel.get("Acuracidade", pd.Series("—", index=df_rel.index)).fillna("—")
+    df_rel["Saldo ERP (Total)"] = pd.to_numeric(df_rel.get("Saldo ERP (Total)"), errors="coerce").fillna(0)
+    df_rel["Saldo WMS"] = pd.to_numeric(df_rel.get("Saldo WMS"), errors="coerce").fillna(0)
+    df_rel["Acuracidade"] = df_rel["Acuracidade"].fillna("—") if "Acuracidade" in df_rel.columns else "—"
 
-    saldo_erp = pd.to_numeric(df_rel["Saldo ERP (Total)"], errors="coerce").fillna(0) \
-                if "Saldo ERP (Total)" in df_rel.columns else pd.Series(0, index=df_rel.index)
-    vl_unit   = pd.to_numeric(df_rel["Vl Unit"], errors="coerce").fillna(0) \
-                if "Vl Unit" in df_rel.columns else pd.Series(0, index=df_rel.index)
+    saldo_erp = pd.to_numeric(df_rel["Saldo ERP (Total)"], errors="coerce").fillna(0)
+    vl_unit = pd.to_numeric(df_rel.get("Vl Unit"), errors="coerce").fillna(0)
 
-    df_rel["Diferença Invent"]   = saldo_erp - df_rel["Invent WMS"]
-    if "Vl Total ERP" not in df_rel.columns:
-        df_rel["Vl Total ERP"]   = saldo_erp * vl_unit
-    df_rel["Vl Total Diferença"] = df_rel["Diferença Invent"] * vl_unit
+    df_rel["Diferença Invent"] = df_rel["Saldo WMS"] - saldo_erp
+    df_rel["Acuracidade"] = np.where(saldo_erp != 0, (df_rel["Saldo WMS"] / saldo_erp) * 100, np.where(df_rel["Saldo WMS"] == 0, 100, 0))
+    df_rel["Vl Total ERP"] = saldo_erp * vl_unit
+    if "Vl Total Diferença" not in df_rel.columns:
+        df_rel["Vl Total Diferença"] = df_rel["Diferença Invent"] * vl_unit
 
     cols_saida = [c for c in [
-        "Produto","Descrição",
-        "Saldo ERP (Total)","Saldo WMS","Invent WMS",
-        "Diferença Invent","Acuracidade",
-        "Vl Total ERP","Vl Total Diferença"
+        "Produto", "Descrição",
+        "Saldo ERP (Total)", "Saldo WMS",
+        "Diferença Invent", "Acuracidade",
+        "Vl Total ERP", "Vl Total Diferença"
     ] if c in df_rel.columns]
     return df_rel[cols_saida].sort_values("Vl Total ERP", ascending=False).reset_index(drop=True)
 
-
 def gerar_pdf_kpmg(ciclo, df_rel, empresa, filial):
-    return gerar_pdf_kpmg_consolidado([ciclo], {ciclo.get("num_ciclo",""): df_rel}, empresa, filial)
+    return gerar_pdf_kpmg_consolidado(
+        [ciclo],
+        {ciclo.get("num_ciclo", ""): df_rel},
+        empresa,
+        filial,
+    )
 
 
 def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
-    try:
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.lib import colors
-        from reportlab.lib.units import cm
-        from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
-                                        Paragraph, Spacer, HRFlowable, PageBreak)
-        from reportlab.lib.styles import ParagraphStyle
-        from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
-    except ImportError:
-        return None
-
     buf    = io.BytesIO()
     doc    = SimpleDocTemplate(buf, pagesize=landscape(A4),
                                leftMargin=1.5*cm, rightMargin=1.5*cm,
@@ -324,6 +402,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         len(dfs_rel.get(c.get("num_ciclo",""), pd.DataFrame()))
         for c in ciclos_sel
     )
+
     def _calc_acur(df_c):
         if df_c.empty: return None
         for col_div in ["Diferença Invent","Divergencia Qtd","Divergência"]:
@@ -348,6 +427,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     cobertura_max = max((c.get("cobertura_pct",0) for c in ciclos_sel), default=0)
     n_ciclos = len(ciclos_sel)
 
+    # ── CAPA ──
     elems.append(Spacer(1, 1*cm))
     elems.append(Paragraph("Gestão Integrada I9", sty("gi", fontSize=11, textColor=C_ORANGE, fontName="Helvetica-Bold")))
     elems.append(Spacer(1, 0.3*cm))
@@ -361,22 +441,21 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     elems.append(Paragraph(f"Ciclos: {n_ciclos}", s_capa_meta))
     elems.append(Spacer(1, 0.8*cm))
 
+    # ── KPIs ──
     elems.append(Paragraph("Resumo Executivo", s_sec))
     elems.append(HRFlowable(width="100%", thickness=1, color=C_ORANGE))
     elems.append(Spacer(1, 0.3*cm))
-
     kpi_labels = ["SKUs Contados", "Cobertura KPMG", "Acuracidade Média", "Ciclos Realizados"]
     kpi_values = [str(total_skus_cont), f"{cobertura_max:.1f}%", acur_media, str(n_ciclos)]
     kpi_row_l  = [Paragraph(l, s_kpi_lbl) for l in kpi_labels]
     kpi_row_v  = [Paragraph(v, s_kpi_val) for v in kpi_values]
     kpi_t = Table([kpi_row_l, kpi_row_v], colWidths=[4*cm]*4)
     kpi_t.setStyle(TableStyle([
-        ("BACKGROUND",     (0,0), (-1,-1), C_TEAL),
-        ("BOX",            (0,0), (-1,-1), 0.5, C_DARK),
-        ("INNERGRID",      (0,0), (-1,-1), 0.3, C_DARK),
-        ("TOPPADDING",     (0,0), (-1,-1), 6),
-        ("BOTTOMPADDING",  (0,0), (-1,-1), 6),
-        ("ROUNDEDCORNERS", [4]),
+        ("BACKGROUND",    (0,0), (-1,-1), C_TEAL),
+        ("BOX",           (0,0), (-1,-1), 0.5, C_DARK),
+        ("INNERGRID",     (0,0), (-1,-1), 0.3, C_DARK),
+        ("TOPPADDING",    (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
     ]))
     elems.append(kpi_t)
     elems.append(Spacer(1, 0.6*cm))
@@ -390,6 +469,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         sty("ctx", fontSize=9, textColor=colors.black, leading=13)
     ))
 
+    # ── LISTA DE CICLOS ──
     elems.append(PageBreak())
     elems.append(Paragraph("Lista de Ciclos Realizados", s_sec))
     elems.append(HRFlowable(width="100%", thickness=1, color=C_ORANGE))
@@ -401,31 +481,29 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     for i, c in enumerate(ciclos_sel, 1):
         num_c = c.get("num_ciclo","")
         df_c  = dfs_rel.get(num_c, pd.DataFrame())
-        _erp_j = c.get("erp_json","[]")
-        try:
-            _erp_data = json.loads(_erp_j) if _erp_j and _erp_j != "[]" else []
-        except:
-            _erp_data = []
-
+        _erp_data = c.get("uploads", []) or []
         _docs_map = defaultdict(list)
-        for r in _erp_data:
-            _doc_num = str(r.get("Documento","—")).strip()
-            _docs_map[_doc_num].append(r)
+        for upload in _erp_data:
+            doc_num = str(upload.get("documento", "—")).strip() or "—"
+            for item in upload.get("dados", []):
+                row = dict(item)
+                row["Documento"] = doc_num
+                _docs_map[doc_num].append(row)
 
         if not _docs_map:
-            n_sku = len(df_c) if not df_c.empty else c.get("qtd_contados", len(c.get("produtos_contados",[])))
+            n_sku = len(df_c) if not df_c.empty else c.get("qtd_contados", len(c.get("produtos_contados", [])))
             acur_c = acur_por_ciclo.get(num_c)
             acur_str = f"{acur_c:.1f}%" if acur_c is not None else "—"
             rows_ciclos.append([
-                Paragraph(str(i),         s_cell_c),
-                Paragraph(num_c,          s_cell),
-                Paragraph(c.get("data","—"), s_cell_c),
-                Paragraph(c.get("responsavel","—"), s_cell),
-                Paragraph("—",            s_cell_c),
-                Paragraph(str(n_sku),     s_cell_c),
-                Paragraph("—",            s_cell_c),
+                Paragraph(str(i),                          s_cell_c),
+                Paragraph(num_c,                           s_cell),
+                Paragraph(c.get("data","—"),           s_cell_c),
+                Paragraph(c.get("responsavel","—"),    s_cell),
+                Paragraph("—",                           s_cell_c),
+                Paragraph(str(n_sku),                    s_cell_c),
+                Paragraph("—",                           s_cell_c),
                 Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_cell_c),
-                Paragraph(acur_str,       s_cell_c),
+                Paragraph(acur_str,                      s_cell_c),
             ])
         else:
             docs_list = list(_docs_map.keys())
@@ -437,7 +515,6 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
                                 if float(str(r.get("Divergencia Qtd",0)).replace(",",".") or 0) != 0)
                 acur_doc = f"{(n_sku_doc-n_div_doc)/n_sku_doc*100:.1f}%" if n_sku_doc > 0 else "—"
                 cobertura_doc = f"{c.get('cobertura_pct',0):.1f}%" if j == n_docs-1 else "—"
-
                 rows_ciclos.append([
                     Paragraph(str(i) if j == 0 else "", s_cell_c),
                     Paragraph(num_c  if j == 0 else "", s_cell),
@@ -464,6 +541,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     ]))
     elems.append(tbl_ciclos)
 
+    # ── DETALHE POR CICLO ──
     for idx, c in enumerate(ciclos_sel, 1):
         elems.append(PageBreak())
         num_c  = c.get("num_ciclo","—")
@@ -475,9 +553,9 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         if len(parts) > 2:
             seen = []
             for p in parts:
-                if p not in seen:
-                    seen.append(p)
+                if p not in seen: seen.append(p)
             _num_c_display = "-".join(seen)
+
         elems.append(Paragraph(f"Ciclo {idx} — {_num_c_display}", s_sec))
         elems.append(HRFlowable(width="100%", thickness=1, color=C_ORANGE))
         elems.append(Spacer(1, 0.3*cm))
@@ -490,26 +568,21 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         acur_c_val = acur_por_ciclo.get(num_c)
         acur_c_str = f"{acur_c_val:.1f}%" if acur_c_val is not None else "—"
 
-        _erp_j2 = c.get("erp_json","[]")
-        try:
-            _erp_d2 = json.loads(_erp_j2) if _erp_j2 and _erp_j2 != "[]" else []
-            _docs2 = list(dict.fromkeys([str(r.get("Documento","")).strip() for r in _erp_d2 if r.get("Documento","")]))
-            num_inv_det = ", ".join(_docs2) if _docs2 else c.get("num_inv","—")
-        except:
-            num_inv_det = c.get("num_inv","—")
+        uploads_c = c.get("uploads", [])
+        docs_upload = list(dict.fromkeys([str(u.get("documento", "")).strip() for u in uploads_c if u.get("documento", "")]))
+        datas_upload = [str(u.get("data_upload", "")).strip() for u in uploads_c if u.get("data_upload", "")]
+        data_cont_det = datas_upload[0] if datas_upload else c.get("data_fechamento", c.get("data_geracao", "—"))
+        num_inv_det = ", ".join(docs_upload) if docs_upload else c.get("num_inv", "—")
 
         meta_data = [
-            [Paragraph("Data da contagem", s_det_label), Paragraph(c.get("data","—"), s_det_val),
-             Paragraph("Nº Inventário",    s_det_label), Paragraph(num_inv_det, s_det_val),
-             Paragraph("Status",           s_det_label), Paragraph(c.get("status","—"), s_det_val)],
-            [Paragraph("Responsável",      s_det_label), Paragraph(c.get("responsavel","—"), s_det_val),
-             Paragraph("Acuracidade",      s_det_label), Paragraph(acur_c_str, s_det_val),
-             Paragraph("SKUs contados",    s_det_label), Paragraph(str(n_sku), s_det_val)],
-            [Paragraph("SKUs na lista",    s_det_label), Paragraph(str(c.get("qtd_lista","—")), s_det_val),
-             Paragraph("SKUs divergentes", s_det_label), Paragraph(str(n_div_c), s_det_val),
-             Paragraph("Cobertura",        s_det_label), Paragraph(f"{c.get('cobertura_pct',0):.1f}%", s_det_val)],
+            [Paragraph("Data da contagem", s_det_label), Paragraph(data_cont_det, s_det_val),
+             Paragraph("Nº Inventário", s_det_label), Paragraph(num_inv_det, s_det_val)],
+            [Paragraph("Acuracidade", s_det_label), Paragraph(acur_c_str, s_det_val),
+             Paragraph("SKUs contados", s_det_label), Paragraph(str(n_sku), s_det_val)],
+            [Paragraph("SKUs divergentes", s_det_label), Paragraph(str(n_div_c), s_det_val),
+             Paragraph("", s_det_label), Paragraph("", s_det_val)],
         ]
-        tbl_meta = Table(meta_data, colWidths=[3*cm, 4.5*cm, 2.5*cm, 3*cm, 2.5*cm, 3*cm])
+        tbl_meta = Table(meta_data, colWidths=[3.2*cm, 5.0*cm, 3.0*cm, 4.6*cm])
         tbl_meta.setStyle(TableStyle([
             ("BACKGROUND",    (0,0), (-1,-1), C_LGRAY),
             ("BOX",           (0,0), (-1,-1), 0.5, C_GRAY),
@@ -521,10 +594,11 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
         elems.append(Spacer(1, 0.4*cm))
 
         if not df_rel.empty:
-            elems.append(Paragraph(f"Produtos inventariados ({n_sku})", sty("pi", fontSize=9, textColor=C_TEAL, fontName="Helvetica-Bold", spaceBefore=4, spaceAfter=4)))
-            headers  = ["Código","Descrição","Saldo ERP","Saldo WMS","Inventariado","Diferença","Vl Total ERP","Vl Total Dif.","Justificativa","NF Ajuste"]
-            col_keys = ["Produto","Descrição","Saldo ERP (Total)","Saldo WMS","Invent WMS","Diferença Invent","Vl Total ERP","Vl Total Diferença","Justificativa","NF Ajuste"]
-            col_w    = [1.6*cm, 5.5*cm, 2.0*cm, 2.0*cm, 2.2*cm, 2.0*cm, 3.2*cm, 3.2*cm, 3.5*cm, 2.2*cm]
+            elems.append(Paragraph(f"Produtos inventariados ({n_sku})",
+                sty("pi", fontSize=9, textColor=C_TEAL, fontName="Helvetica-Bold", spaceBefore=4, spaceAfter=4)))
+            headers  = ["Código","Descrição","Saldo ERP","Saldo WMS","Diferença","Acurac.","Vl Total ERP","Vl Total Dif.","Justificativa","NF Ajuste"]
+            col_keys = ["Produto","Descrição","Saldo ERP (Total)","Saldo WMS","Diferença Invent","Acuracidade","Vl Total ERP","Vl Total Diferença","Justificativa","NF Ajuste"]
+            col_w    = [1.6*cm, 5.3*cm, 1.8*cm, 1.8*cm, 1.8*cm, 1.7*cm, 2.8*cm, 2.8*cm, 3.2*cm, 2.0*cm]
             _justs_pdf = c.get("_justs_pdf", {})
             _nfs_pdf   = c.get("_nfs_pdf", {})
 
@@ -533,40 +607,42 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
                 r = []
                 for k in col_keys:
                     v = row.get(k, "—")
-                    if k in ["Saldo ERP (Total)","Saldo WMS","Invent WMS"]:
-                        r.append(Paragraph(f"{float(v):,.2f}" if v not in ("—", None) else "—", s_num))
+                    if k in ["Saldo ERP (Total)","Saldo WMS"]:
+                        try:    r.append(Paragraph(f"{float(v):,.2f}", s_num))
+                        except: r.append(Paragraph("—", s_num))
                     elif k == "Diferença Invent":
                         try:
                             fv = float(v)
-                            txt = f"-{abs(fv):,.2f}" if fv > 0 else (f"+{abs(fv):,.2f}" if fv < 0 else "0,00")
+                            txt = f"{fv:,.2f}"
                             r.append(Paragraph(txt, sty("dif", fontSize=8, alignment=TA_RIGHT,
-                                               textColor=C_RED if fv > 0 else (C_GREEN if fv < 0 else colors.black), leading=10)))
-                        except:
-                            r.append(Paragraph("—", s_num))
+                                               textColor=C_RED if fv < 0 else (C_GREEN if fv > 0 else colors.black), leading=10)))
+                        except: r.append(Paragraph("—", s_num))
+                    elif k == "Acuracidade":
+                        try:
+                            r.append(Paragraph(f"{float(v):,.1f}%", s_num))
+                        except: r.append(Paragraph("—", s_num))
                     elif k in ["Vl Total ERP","Vl Total Diferença"]:
                         try:
                             fv = float(v)
                             if k == "Vl Total Diferença" and fv != 0:
-                                txt = f"R$ -{abs(fv):,.2f}" if fv > 0 else f"R$ +{abs(fv):,.2f}"
+                                txt = f"R$ {fv:,.2f}"
                                 r.append(Paragraph(txt, sty("vdif", fontSize=8, alignment=TA_RIGHT,
-                                                   textColor=C_RED if fv > 0 else C_GREEN, leading=10)))
+                                                   textColor=C_RED if fv < 0 else C_GREEN, leading=10)))
                             else:
                                 r.append(Paragraph(f"R$ {fv:,.2f}", s_num))
-                        except:
-                            r.append(Paragraph("—", s_num))
+                        except: r.append(Paragraph("—", s_num))
+                    elif k == "Produto":
+                        r.append(Paragraph(str(v).zfill(6), s_cell))
+                    elif k == "Justificativa":
+                        cod  = str(row.get("Produto","")).zfill(6)
+                        just = _justs_pdf.get(cod, "—")
+                        r.append(Paragraph(str(just)[:40], s_cell))
+                    elif k == "NF Ajuste":
+                        cod = str(row.get("Produto","")).zfill(6)
+                        nf  = _nfs_pdf.get(cod, "—")
+                        r.append(Paragraph(str(nf), s_cell_c))
                     else:
-                        if k == "Produto":
-                            r.append(Paragraph(str(v).zfill(6), s_cell))
-                        elif k == "Justificativa":
-                            cod = str(row.get("Produto","")).zfill(6)
-                            just = _justs_pdf.get(cod, "—")
-                            r.append(Paragraph(str(just)[:40], s_cell))
-                        elif k == "NF Ajuste":
-                            cod = str(row.get("Produto","")).zfill(6)
-                            nf  = _nfs_pdf.get(cod, "—")
-                            r.append(Paragraph(str(nf), s_cell_c))
-                        else:
-                            r.append(Paragraph(str(v)[:55], s_cell))
+                        r.append(Paragraph(str(v)[:55], s_cell))
                 tbl_data.append(r)
 
             tbl_prod = Table(tbl_data, colWidths=col_w, repeatRows=1)
@@ -597,7 +673,7 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
                     ("BOX",           (0,0), (-1,-1), 0.5, C_GRAY),
                     ("INNERGRID",     (0,0), (-1,-1), 0.3, C_GRAY),
                     ("TOPPADDING",    (0,0), (-1,-1), 3),
-                    ("BOTTOMPADDING",  (0,0), (-1,-1), 3),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 3),
                 ]))
                 elems.append(tbl_p)
 
@@ -613,340 +689,480 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
     return buf.getvalue()
 
 
-def _card(col, num, titulo, desc, ativo, concluido, chave):
-    if concluido:
-        brd="#27AE60"; bg="#E8F5E9"; ctxt="#27500A"; icon="✓"; badge="Concluído"; bbg="#27AE60"
-    elif ativo:
-        brd="#005562"; bg="#E1F5EE"; ctxt="#085041"; icon=str(num); badge="Ativo"; bbg="#005562"
-    else:
-        brd="#cccccc"; bg="var(--color-background-secondary)"; ctxt="var(--color-text-secondary)"; icon=str(num); badge="Pendente"; bbg="#888"
-    with col:
-        st.markdown(
-            f"""<div style="border:2px solid {brd};border-radius:12px;padding:16px;
-                background:{bg};min-height:110px;">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                <div style="width:36px;height:36px;border-radius:50%;background:{brd};
-                            display:flex;align-items:center;justify-content:center;
-                            color:#fff;font-weight:600;font-size:16px;">{icon}</div>
-                <span style="background:{bbg};color:#fff;font-size:11px;
-                             padding:2px 10px;border-radius:20px;">{badge}</span>
-              </div>
-              <div style="margin-top:10px;font-weight:600;font-size:15px;color:{ctxt};">{titulo}</div>
-              <div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px;">{desc}</div>
-            </div>""", unsafe_allow_html=True)
-        return st.button("Abrir", key=chave, use_container_width=True,
-                         type="primary" if ativo else "secondary")
-
-
+# ── RENDERIZAÇÃO PRINCIPAL ───────────────────────────────────────────────────
 def render(df_jlle, df_outras, formatar_br):
-    st.markdown("## 🔄 Inventário Cíclico")
-    st.caption("Geração de listas com **regra KPMG**: todos os SKUs contados ao menos uma vez por ano.")
+    engine = st.session_state.get("_engine")
+    empresa = st.session_state.get("_app_empresa")
+    filial = st.session_state.get("_app_filial")
+    
+    if not engine:
+        st.warning("Banco de dados não conectado.")
+        return
 
-    if df_jlle is None or df_jlle.empty:
-        st.warning("Nenhum dado encontrado. Carregue os dados na sidebar."); return
+    _cache_key = f"st_data_{empresa}_{filial}"
+    if _cache_key not in st.session_state or st.session_state.get("ic_force_reload"):
+        st.session_state[_cache_key] = db_carregar_tudo(engine, empresa, filial)
+        st.session_state["ic_force_reload"] = False
+    
+    data = st.session_state[_cache_key]
+    ciclo_ativo = data.get("ciclo_ativo")
+    erp_data = data.get("erp_uploads", [])
+    justs_salvas = data.get("justs", {})
+    
+    num_c = ciclo_ativo['num_ciclo'] if ciclo_ativo else ""
+    nf_ajustes = db_obter_nf_ajustes(engine, empresa, filial, num_c) if num_c else {}
 
-    _app_emp = st.session_state.get("_app_empresa")
-    _app_fil = st.session_state.get("_app_filial")
-    if _app_emp and _app_fil:
-        st.session_state.setdefault("ic_empresa_sel", _app_emp)
-        st.session_state.setdefault("ic_filial_sel",  _app_fil)
-        if st.session_state.get("ic_empresa_sel") != _app_emp or \
-           st.session_state.get("ic_filial_sel")  != _app_fil:
-            st.session_state["ic_empresa_sel"] = _app_emp
-            st.session_state["ic_filial_sel"]  = _app_fil
-
-    empresa_sel = st.session_state.get("ic_empresa_sel")
-    filial_sel  = st.session_state.get("ic_filial_sel")
-    engine_db = st.session_state.get("_engine")
-
-    if empresa_sel and filial_sel:
-        _cache_key = f"ic_cache_{empresa_sel}_{filial_sel}"
-        _force = st.session_state.pop("ic_force_reload", False)
-        _deve_recarregar = (_cache_key not in st.session_state) or _force
-        if _deve_recarregar:
-            _tudo = db_carregar_tudo(engine_db, empresa_sel, filial_sel)
-            st.session_state[f"{_cache_key}_contados"]    = _tudo["contados"]
-            st.session_state[f"{_cache_key}_ciclos"]      = _tudo["ciclos"]
-            st.session_state[f"{_cache_key}_ciclo_ativo"] = _tudo["ciclo_ativo"]
-            st.session_state[f"{_cache_key}_erp_uploads"] = _tudo["erp_uploads"]
-            st.session_state[f"{_cache_key}_nf_ajustes"]  = _tudo["nf_ajustes"]
-            st.session_state[f"{_cache_key}_docs_conf"]   = _tudo["docs_conf"]
-            st.session_state[f"{_cache_key}_justs"]       = _tudo["justs"]
-            st.session_state[_cache_key] = True
-        contados    = st.session_state.get(f"{_cache_key}_contados", {})
-        ciclos      = st.session_state.get(f"{_cache_key}_ciclos", [])
-        ciclo_ativo = st.session_state.get(f"{_cache_key}_ciclo_ativo")
-        label       = f"{empresa_sel} — {filial_sel}"
-        _fil_sufixo = filial_sel.split(" - ")[-1] if " - " in filial_sel else filial_sel
-        _emp_prefixo = empresa_sel.split(" - ")[0] if " - " in empresa_sel else empresa_sel
-        df_filial = df_jlle[
-            (df_jlle["Filial"] == _fil_sufixo) |
-            (df_jlle["Empresa"].str.contains(_emp_prefixo, case=False, na=False) &
-             (df_jlle["Filial"] == _fil_sufixo))
-        ].copy()
-        if df_filial.empty:
-            df_filial = df_jlle.copy()
-    else:
-        contados = {}; ciclos = []; ciclo_ativo = None
-        label = ""; df_filial = pd.DataFrame()
-
-    # --- Lógica de Persistência: Se houver ciclo ativo, pula direto para etapa 2 ---
-    if ciclo_ativo and "ic_etapa_nav" not in st.session_state:
-        st.session_state["ic_etapa_nav"] = 2
-
-    if st.session_state.pop("ic_fechado_msg", False):
-        st.success("✅ Inventário fechado e registrado no histórico KPMG!")
-
-    if not df_filial.empty:
-        df_score   = calcular_score(df_filial, tuple(sorted(contados.items())))
-        total_skus = len(df_score)
-        total_cont = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
-        pct_cob    = (total_cont/total_skus*100) if total_skus>0 else 0
-    else:
-        df_score = pd.DataFrame(); total_skus = 0; total_cont = 0; pct_cob = 0.0
-
-    _uploads = ciclo_ativo.get("uploads", []) if ciclo_ativo else []
-    if not isinstance(_uploads, list):
-        _uploads = []
-    ja_cont_ciclo = set()
-    for u in _uploads:
-        ja_cont_ciclo.update(str(p).strip().zfill(6) for p in u.get("produtos", []))
-    pl_ciclo  = {str(p).strip().zfill(6) for p in (ciclo_ativo.get("produtos_lista",[]) if ciclo_ativo else [])}
-    faltam    = pl_ciclo - ja_cont_ciclo
-    pct_ciclo = len(ja_cont_ciclo & pl_ciclo) / len(pl_ciclo) * 100 if pl_ciclo else 0
-
-    _num_ciclo_ativo = ciclo_ativo.get("num_ciclo","") if ciclo_ativo else ""
-    erp_uploads_ativo = st.session_state.get(f"{_cache_key}_erp_uploads", []) if empresa_sel and filial_sel else []
-    erp_upload = erp_uploads_ativo[0] if erp_uploads_ativo else None
-    nf_ajustes_ativo = st.session_state.get(f"{_cache_key}_nf_ajustes", []) if empresa_sel and filial_sel else []
-
-    _conf_concluida = False
-    _nf_concluida   = False
-    if _num_ciclo_ativo and empresa_sel and filial_sel and erp_uploads_ativo:
-        try:
-            _docs_conf = st.session_state.get(f"{_cache_key}_docs_conf", set())
-            _docs_erp  = {u.get("documento","") for u in erp_uploads_ativo}
-            _conf_concluida = bool(_docs_erp and _docs_erp.issubset(_docs_conf))
-            if _conf_concluida:
-                _justs = st.session_state.get(f"{_cache_key}_justs", {})
-                _n_ajuste = sum(1 for p,j in _justs.items()
-                               if j == "Ajuste de inventário" and not p.startswith("_"))
-                _nf_concluida = (_n_ajuste == 0) or (len(nf_ajustes_ativo) > 0)
-            else:
-                _nf_concluida = False
-        except:
-            pass
-    elif _num_ciclo_ativo and empresa_sel and filial_sel and not erp_uploads_ativo:
-        _conf_concluida = False
-        _nf_concluida   = False
-
-    etapa_nav = st.session_state.get("ic_etapa_nav", 1)
-
-    st.markdown("---")
-    _tem_div_atual = False
-    if erp_uploads_ativo:
-        _docs_conf_check = st.session_state.get(f"{_cache_key}_docs_conf", set()) if _num_ciclo_ativo else set()
-        _uploads_pend = [u for u in erp_uploads_ativo if u.get("documento","") not in _docs_conf_check]
-        if _uploads_pend:
-            _dados_pend = _uploads_pend[-1].get("dados",[])
-            _tem_div_atual = any(float(str(r.get("Divergencia Qtd",0)).replace(",",".") or 0) != 0 for r in _dados_pend)
-
-    if etapa_nav == 2:
-        _conf_concluida = False
-        _nf_concluida   = False
-
-    c1,c2,c3,c4,c5,c6 = st.columns(6)
-    b1 = _card(c1,1,"Gerar lista",  "Define o ciclo e a lista",
-               ativo=(etapa_nav==1), concluido=(ciclo_ativo is not None), chave="ic_n1")
-    b2 = _card(c2,2,"Upload ERP",   "Importa relatório Protheus",
-               ativo=(etapa_nav==2), concluido=(len(erp_uploads_ativo)>0), chave="ic_n2")
-    b3 = _card(c3,3,"Conferência",  "Divergências e justificativas",
-               ativo=(etapa_nav==3), concluido=_conf_concluida, chave="ic_n3")
-    b4 = _card(c4,4,"NF de Ajuste", "Upload da NF de baixa/perda",
-               ativo=(etapa_nav==4), concluido=_nf_concluida, chave="ic_n4")
-    b5 = _card(c5,5,"Fechar",       "Relatório final e fechamento",
-               ativo=(etapa_nav==5), concluido=(len(ciclos)>0), chave="ic_n5")
-    b6 = _card(c6,6,"Histórico",    "PDFs dos ciclos fechados",
-               ativo=(etapa_nav==6), concluido=False, chave="ic_n6")
-
-    if b1: st.session_state["ic_etapa_nav"]=1; st.rerun()
-    if b2: st.session_state["ic_etapa_nav"]=2; st.rerun()
-    if b3: st.session_state["ic_etapa_nav"]=3; st.rerun()
-    if b4: st.session_state["ic_etapa_nav"]=4; st.rerun()
-    if b5: st.session_state["ic_etapa_nav"]=5; st.rerun()
-    if b6: st.session_state["ic_etapa_nav"]=6; st.rerun()
-
-    st.markdown("---")
-
-    # ── ETAPA 1 ───────────────────────────────────────────────────────────
-    if etapa_nav == 1:
-        st.markdown("### 1. Gerar lista do ciclo")
-
-        if not empresa_sel or not filial_sel:
-            st.info("👆 Volte à tela inicial e selecione a Empresa e a Filial para começar.")
-            return
-
-        # --- BLOCO DE SEGURANÇA: SE JÁ EXISTIR CICLO, TRAVA A LISTA ---
-        if ciclo_ativo:
-            st.warning(f"⚠️ Já existe um ciclo ativo: **{ciclo_ativo['num_ciclo']}**")
-            col_res, col_del = st.columns(2)
-            if col_res.button("Retomar Ciclo Atual", type="primary", use_container_width=True):
-                st.session_state["ic_etapa_nav"] = 2
-                st.rerun()
-            if col_del.button("Cancelar e Gerar Novo", type="secondary", use_container_width=True):
-                db_fechar_ciclo_ativo(engine_db, empresa_sel, filial_sel)
-                st.session_state["ic_force_reload"] = True
-                st.rerun()
-            st.markdown("---")
-
-        st.markdown(
-            f"""<div style="background:#004550;border-radius:8px;padding:10px 16px;margin-bottom:8px;">
-              <span style="color:#aac8cc;font-size:0.85rem;">🏢 Empresa</span>
-              <span style="color:#fff;font-weight:700;margin:0 16px;">{empresa_sel}</span>
-              <span style="color:#aac8cc;font-size:0.85rem;">📍 Filial</span>
-              <span style="color:#fff;font-weight:700;margin-left:8px;">{filial_sel}</span>
-            </div>""", unsafe_allow_html=True)
-
-        if df_filial.empty:
-            st.info("👆 Selecione modo e clique em **Gerar lista** para carregar os dados.")
-            return
-
-        data_aud = st.session_state.get("_data_auditoria")
-        col_a,col_b = st.columns([3,2])
-        col_a.caption(f"📅 Dados carregados em: **{data_aud or 'esta sessão'}**")
-        col_b.caption("⚠️ Itens divergentes reaparecem mesmo após contados.")
-
-        _armazens_disponiveis = []
-        if "Armazem" in df_filial.columns:
-            _armazens_disponiveis = sorted(df_filial["Armazem"].dropna().unique().tolist())
-        
-        _arm_sel = []
-        if _armazens_disponiveis:
-            _arm_sel = st.multiselect(
-                "🏭 Filtrar por Armazém",
-                options=_armazens_disponiveis,
-                default=_armazens_disponiveis,
-                key="ic_armazens_sel",
-                placeholder="Todos os armazéns",
-            )
-            df_filial_score = df_filial[df_filial["Armazem"].isin(_arm_sel)].copy() if _arm_sel else df_filial.copy()
-        else:
-            df_filial_score = df_filial.copy()
-
-        if not df_filial_score.empty:
-            df_score   = calcular_score(df_filial_score, tuple(sorted(contados.items())))
-            total_skus = len(df_score)
-            total_cont = sum(1 for p in df_score["Produto"].astype(str) if p in contados)
-            pct_cob    = (total_cont/total_skus*100) if total_skus>0 else 0
-        else:
-            df_score = pd.DataFrame(); total_skus = 0; total_cont = 0; pct_cob = 0.0
-
-        c1m,c2m,c3m,c4m = st.columns(4)
-        c1m.metric("Total SKUs",  f"{total_skus:,}")
-        c2m.metric("Divergentes", f"{int((df_score['Divergência']!=0).sum()):,}" if not df_score.empty else "0")
-        c3m.metric("Curva A",     f"{int((df_score['Curva ABC']=='A').sum()):,}" if not df_score.empty else "0")
-        c4m.metric("Valor Total", f"R$ {formatar_br(df_score['Vl Total ERP'].sum())}" if not df_score.empty else "R$ 0")
-
-        cor_b = "#27AE60" if pct_cob>=100 else "#EC6E21"
-        st.markdown(
-            f"""<div style="background:#004550;border-radius:8px;padding:12px 16px;margin:8px 0;">
-              <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-                <span style="color:#fff;">✅ <b>{total_cont}</b> contados &nbsp;|&nbsp; ⬜ <b>{total_skus-total_cont}</b> pendentes</span>
-                <span style="color:{cor_b};font-weight:bold;">{pct_cob:.1f}%</span>
-              </div>
-              <div style="background:#003040;border-radius:4px;height:10px;">
-                <div style="background:{cor_b};width:{min(pct_cob,100):.1f}%;height:10px;border-radius:4px;"></div>
-              </div></div>""", unsafe_allow_html=True)
-
-        # Se já existir ciclo, usamos a lista salva. Se não, geramos dinamicamente.
-        if ciclo_ativo and "produtos_lista" in ciclo_ativo:
-            prods_salvos = [str(p).zfill(6) for p in ciclo_ativo["produtos_lista"]]
-            df_lista = df_score[df_score["Produto"].astype(str).str.zfill(6).isin(prods_salvos)].copy()
-            qtd_ciclo = len(df_lista)
-        else:
-            modo = st.radio("Modo", ["Quantidade fixa","Percentual"], horizontal=True, key="ic_modo")
-            if modo == "Quantidade fixa":
-                st.session_state.setdefault("ic_qtd", 30)
-                qtd_ciclo = min(st.session_state.ic_qtd, total_skus)
-            else:
-                pmap = {"5%":0.05,"10%":0.10,"20%":0.20,"30%":0.30}
-                pl   = st.select_slider("Faixa",list(pmap.keys()),value="10%",key="ic_pct")
-                qtd_ciclo = max(1,int(total_skus*pmap[pl]))
-            
-            df_lista = montar_lista(df_score, qtd_ciclo, contados)
-
-        st.markdown(f"**{len(df_lista)} itens na lista**")
-        cols_ex = [c for c in ["Produto","Descrição","Curva ABC","Score","Já Contado",
-                                "Saldo ERP (Total)","Vl Total ERP","Motivo","Origem"]
-                   if c in df_lista.columns]
-        
-        st.dataframe(df_lista[cols_ex], use_container_width=True, hide_index=False)
-
+    if "ic_etapa_nav" not in st.session_state:
         if not ciclo_ativo:
-            if st.button("🔍 Gerar e Iniciar Ciclo", type="primary", use_container_width=True):
-                _base_ciclo = f"{date.today().strftime('%Y%m%d')}-{empresa_sel}-{filial_sel}".replace(" ","")
-                num_ciclo = f"{_base_ciclo}-{len(ciclos)+1}"
-                
-                db_salvar_ciclo_ativo(engine_db, empresa_sel, filial_sel, {
-                    "num_ciclo":      num_ciclo,
-                    "data_geracao":   date.today().strftime("%d/%m/%Y"),
-                    "label":          label,
-                    "qtd_lista":      len(df_lista),
-                    "produtos_lista": df_lista["Produto"].astype(str).tolist(),
-                    "uploads":        [],
-                    "status":         "Em andamento",
+            st.session_state["ic_etapa_nav"] = 1
+        elif not erp_data:
+            st.session_state["ic_etapa_nav"] = 2
+        elif not justs_salvas:
+            st.session_state["ic_etapa_nav"] = 3
+        else:
+            st.session_state["ic_etapa_nav"] = 5
+    
+    etapa = st.session_state["ic_etapa_nav"]
+    if ciclo_ativo:
+        if not erp_data and etapa < 2:
+            etapa = 2
+        elif erp_data and not justs_salvas and etapa < 3:
+            etapa = 3
+        elif justs_salvas and not nf_ajustes and etapa < 4:
+            etapa = 4
+        elif nf_ajustes and etapa < 5:
+            etapa = 5
+        st.session_state["ic_etapa_nav"] = etapa
+
+    st.markdown("### Fluxo de Inventário")
+    cols = st.columns(6)
+    steps = ["Gerar Lista", "Upload ERP", "Conferência", "NF Ajuste", "Fechar", "Histórico"]
+
+    for i, name in enumerate(steps, 1):
+        if etapa == 6:
+            done = (i < 6)
+        else:
+            if i == 1: done = bool(ciclo_ativo)
+            elif i == 2: done = bool(erp_data)
+            elif i == 3: done = bool(justs_salvas)
+            elif i == 4: done = bool(nf_ajustes) or (etapa > 4)
+            elif i == 5: done = (not ciclo_ativo and etapa >= 5)
+            else: done = False
+
+        if _card(cols[i-1], i, name, etapa == i, done, f"nv_{i}"):
+            st.session_state["ic_etapa_nav"] = i
+            st.rerun()
+    st.divider()
+
+    # ── ETAPA 1 ──────────────────────────────────────────────────────────
+    if etapa == 1:
+        st.subheader("1. Geração da Lista de Contagem")
+        df_score = calcular_score_turbo(df_jlle, tuple(sorted(data["contados"].items())))
+        
+        # ── SELEÇÃO MANUAL SEM DEPENDER DE ELSE ─────────────────────────
+        with st.expander("⚙️ Seleção Manual"):
+            entrada_manual = st.text_area("Insira os códigos dos produtos")
+            codigos_manuais = [
+                c.strip().zfill(6)
+                for c in entrada_manual.replace(",", " ").split()
+                if c.strip()
+            ]
+        
+        if ciclo_ativo:
+            st.warning(f"⚠️ Ciclo Ativo: **{ciclo_ativo['num_ciclo']}**")
+            if st.button("🚫 Cancelar ciclo atual", type="secondary", use_container_width=True):
+                db_cancelar_ciclo_ativo(engine, empresa, filial)
+                _resetar_estado_ciclo(_cache_key)
+                st.rerun()
+        
+        # PRIORIDADE: manual
+        if codigos_manuais:
+            df_lista = df_score[
+                df_score["Produto"].astype(str).str.zfill(6).isin(codigos_manuais)
+            ].copy()
+        
+        elif ciclo_ativo:
+            prods_fixos = [str(p).zfill(6) for p in ciclo_ativo.get("produtos_lista", [])]
+            contados_set = set(data["contados"].keys())
+            prods_pendentes = [p for p in prods_fixos if p not in contados_set]
+            if prods_pendentes:
+                df_lista = df_score[
+                    df_score["Produto"].astype(str).str.zfill(6).isin(prods_pendentes)
+                ].copy()
+            else:
+                df_lista = df_score[
+                    df_score["Produto"].astype(str).str.zfill(6).isin(prods_fixos)
+                ].copy()
+                st.info("Todos os itens da lista já foram marcados como contados; revise o ciclo ou cancele se quiser reiniciar.")
+        
+        else:
+            armazens = sorted(df_score["Armazem"].unique().tolist()) if "Armazem" in df_score.columns else []
+            arm_sel = st.multiselect("🏭 Armazéns", armazens, default=armazens)
+            df_f = df_score[df_score["Armazem"].isin(arm_sel)] if arm_sel else df_score
+        
+            c1, c2 = st.columns([2,1])
+            modo = c1.radio("Modo", ["Quantidade fixa", "Percentual"], horizontal=True)
+        
+            if modo == "Quantidade fixa":
+                qtd = c2.number_input("Qtd", 5, 200, 30)
+            else:
+                pct = c2.select_slider("%", [5, 10, 20], value=10)
+                qtd = max(1, int(len(df_f) * pct / 100))
+        
+            df_lista = df_f.head(qtd).copy()
+        
+        desc_col = next((c for c in df_lista.columns if "Descr" in str(c)), None)
+        cols_lista = ["Produto"]
+        if desc_col:
+            cols_lista.append(desc_col)
+        cols_lista.extend([c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Já Contado", "Score", "Motivo", "Origem"] if c in df_lista.columns])
+        st.dataframe(df_lista[cols_lista], use_container_width=True, hide_index=True)
+        if not ciclo_ativo:
+            if st.button("🚀 Iniciar Ciclo", type="primary", use_container_width=True):
+                num_c = db_gerar_num_ciclo(engine, empresa, filial)
+                db_salvar_ciclo_ativo(engine, empresa, filial, {
+                    "num_ciclo": num_c,
+                    "data_geracao": date.today().strftime("%d/%m/%Y"),
+                    "responsavel": st.session_state.get("_app_operador", ""),
+                    "produtos_lista": df_lista["Produto"].astype(str).tolist()
                 })
-                st.session_state["ic_force_reload"] = True
+                # Limpar cache e estado para garantir dados frescos do novo ciclo
+                _resetar_estado_ciclo(_cache_key)
                 st.session_state["ic_etapa_nav"] = 2
                 st.rerun()
 
-    # ── ETAPA 2 — UPLOAD ERP (PROTHEUS) ──────────────────────────────────
-    elif etapa_nav == 2:
-        if not ciclo_ativo: st.warning("Gere a lista primeiro."); return
-        st.markdown(f"### 2. Upload ERP — Ciclo: **{ciclo_ativo['num_ciclo']}**")
-        
-        num_ciclo_erp = ciclo_ativo.get("num_ciclo","")
-        if erp_uploads_ativo:
-            st.success(f"✅ **{len(erp_uploads_ativo)} upload(s) ERP** salvos.")
-            for i, u in enumerate(erp_uploads_ativo, 1):
-                with st.expander(f"Etapa {i} — Doc: {u.get('documento','—')}"):
-                    st.dataframe(pd.DataFrame(u["dados"]), use_container_width=True)
-
-        arq_erp = st.file_uploader("Selecione o Excel do Protheus", type=["xlsx"], key="up_erp_file")
-        if arq_erp:
-            df_erp = pd.read_excel(arq_erp)
-            # ... (Lógica de processamento igual ao original)
-            if st.button("💾 Salvar Upload ERP", type="primary"):
-                db_salvar_erp_upload(engine_db, empresa_sel, filial_sel, num_ciclo_erp, "DOC-AUTO", date.today().isoformat(), df_erp.to_dict("records"))
-                st.session_state["ic_force_reload"] = True
+    # ── ETAPA 2 ──────────────────────────────────────────────────────────
+        else:
+            if st.button("âž¡ï¸ Continuar para Upload ERP", type="primary", use_container_width=True):
+                st.session_state["ic_etapa_nav"] = 2
                 st.rerun()
 
-    # ── ETAPA 3 — CONFERÊNCIA ────────────────────────────────────
-    elif etapa_nav == 3:
-        st.markdown("### 3. Conferência")
-        # (Lógica original de conferência...)
-        st.info("Utilize esta tela para justificar as divergências encontradas no Protheus.")
+    elif etapa == 2:
+        st.subheader("2. Upload do Relatório Protheus")
+        if erp_data:
+            st.success(f"✅ Upload salvo (Doc: {erp_data[0].get('documento')})")
+            c1, c2 = st.columns(2)
+            if c1.button("🗑️ Remover", use_container_width=True):
+                db_remover_erp_uploads(engine, empresa, filial, ciclo_ativo['num_ciclo'])
+                st.session_state["ic_aceitar_nao_contados"] = False
+                st.session_state["ic_force_reload"] = True
+                st.rerun()
+            if c2.button("Conferência ➡️", type="primary", use_container_width=True):
+                st.session_state["ic_etapa_nav"] = 3
+                st.rerun()
+        else:
+            arq = st.file_uploader("Selecione Excel Protheus", type=["xlsx"])
+            if arq:
+                df_raw = pd.read_excel(arq, header=None)
+                header_row_idx = 0
+                for idx, row in df_raw.iterrows():
+                    row_vals = [str(x).upper() for x in row.values]
+                    if "CODIGO" in row_vals or "CÓDIGO" in row_vals:
+                        header_row_idx = idx
+                        break
+                df_up = pd.read_excel(arq, header=header_row_idx)
+                df_up.columns = [str(c).upper().strip() for c in df_up.columns]
+                mapa = {}
+                for c in df_up.columns:
+                    if "CODIGO" in c or "CÓDIGO" in c: mapa[c] = "Codigo"
+                    elif "DESCRICAO" in c or "DESCRIÇÃO" in c: mapa[c] = "Descricao"
+                    elif "INVENTARIADA" in c: mapa[c] = "Qtd WMS"
+                    elif "DATA DO INVENTARIO" in c: mapa[c] = "Qtd ERP"
+                    elif "DIFERENCA QUANTIDADE" in c: mapa[c] = "Divergencia Qtd"
+                    elif "DIFERENCA VALOR" in c: mapa[c] = "Divergencia Valor"
+                    elif "DOCUMENTO" in c: mapa[c] = "Documento"
+                df_up = df_up.rename(columns=mapa)
+                df_up = df_up[list(mapa.values())].dropna(subset=["Codigo"])
+                df_up["Codigo"] = df_up["Codigo"].astype(str).str.split('.').str[0].str.zfill(6)
+                df_up["Qtd WMS"] = pd.to_numeric(df_up["Qtd WMS"], errors='coerce').fillna(0)
+                df_up["Qtd ERP"] = pd.to_numeric(df_up["Qtd ERP"], errors='coerce').fillna(0)
+                if "Divergencia Valor" in df_up.columns:
+                    df_up["Divergencia Valor"] = pd.to_numeric(df_up["Divergencia Valor"], errors='coerce').fillna(0)
+                df_up["Divergencia Qtd"] = df_up["Qtd WMS"] - df_up["Qtd ERP"]
+                if "Divergencia Valor" in df_up.columns and (df_up["Divergencia Valor"] > 0).any() and (df_up["Divergencia Qtd"] < 0).any():
+                    df_up["Divergencia Valor"] = -df_up["Divergencia Valor"].abs()
+                st.dataframe(df_up[["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd"]], use_container_width=True)
+                if st.button("💾 Confirmar e Salvar Dados", type="primary"):
+                    doc_num = str(df_up["Documento"].iloc[0]) if "Documento" in df_up.columns else "S/N"
+                    db_salvar_erp_upload(engine, empresa, filial, ciclo_ativo['num_ciclo'], doc_num, date.today().isoformat(), df_up.to_dict("records"))
+                    db_marcar_contados(engine, empresa, filial, df_up["Codigo"].astype(str).tolist(), num_ciclo=ciclo_ativo['num_ciclo'])
+                    st.session_state["ic_aceitar_nao_contados"] = False
+                    st.session_state["ic_force_reload"] = True
+                    st.session_state["ic_etapa_nav"] = 3
+                    st.rerun()
 
-    # ── ETAPA 4 — NF AJUSTE ──────────────────────────────────────
-    elif etapa_nav == 4:
-        st.markdown("### 4. NF de Ajuste")
-        # (Lógica original de NF...)
+    # ── ETAPA 3 ──────────────────────────────────────────────────────────
+    elif etapa == 3:
+        st.subheader("3. Justificativa de Divergências")
+        if erp_data:
+            df_all = pd.concat([pd.DataFrame(u["dados"]) for u in erp_data])
+        else:
+            df_all = pd.DataFrame()
 
-    # ── ETAPA 5 — FECHAR ─────────────────────────────────────────
-    elif etapa_nav == 5:
-        st.markdown("### 5. Fechar Inventário")
-        if st.button("🏁 Finalizar Ciclo e Gravar no Histórico", type="primary"):
-            # Lógica de gravação final...
-            db_fechar_ciclo_ativo(engine_db, empresa_sel, filial_sel)
+        df_score = calcular_score_turbo(df_jlle, tuple(sorted(data["contados"].items())))
+        produtos_esperados = [str(p).zfill(6) for p in ciclo_ativo.get("produtos_lista", [])] if ciclo_ativo else []
+        upload_codes = set(df_all["Codigo"].astype(str).str.zfill(6)) if not df_all.empty and "Codigo" in df_all.columns else set()
+        missing_codes = [p for p in produtos_esperados if p not in upload_codes]
+        zero_erp_codes = []
+        if not df_all.empty and "Codigo" in df_all.columns and "Qtd ERP" in df_all.columns and "Qtd WMS" in df_all.columns:
+            for _, row in df_all.iterrows():
+                codigo = str(row["Codigo"]).zfill(6)
+                qte_erp = pd.to_numeric(row["Qtd ERP"], errors="coerce")
+                if pd.isna(qte_erp):
+                    qte_erp = 0
+                qte_wms = pd.to_numeric(row["Qtd WMS"], errors="coerce")
+                if pd.isna(qte_wms):
+                    qte_wms = 0
+                if codigo in produtos_esperados and qte_erp == 0 and qte_wms > 0:
+                    zero_erp_codes.append(codigo)
+        zero_erp_codes = [c for c in zero_erp_codes if c not in missing_codes]
+        missing_rows = []
+        for codigo in missing_codes + zero_erp_codes:
+            linha = df_score[df_score["Produto"].astype(str).str.zfill(6) == codigo]
+            qtd_wms = float(linha["Saldo WMS"].iloc[0]) if not linha.empty and "Saldo WMS" in linha.columns else 0
+            descricao = linha["Descrição"].iloc[0] if not linha.empty and "Descrição" in linha.columns else ""
+            missing_rows.append({
+                "Codigo": codigo,
+                "Descricao": descricao,
+                "Qtd WMS": qtd_wms,
+                "Qtd ERP": 0,
+                "Divergencia Qtd": qtd_wms,
+                "Status": "Não contado",
+                "Justificativa": "Não contado"
+            })
+
+        if not df_all.empty and "Divergencia Qtd" in df_all.columns:
+            df_div = df_all[df_all["Divergencia Qtd"] != 0].copy()
+        else:
+            df_div = pd.DataFrame(columns=["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd", "Status", "Justificativa"])
+
+        if missing_rows:
+            df_missing = pd.DataFrame(missing_rows)
+            df_div = pd.concat([df_div, df_missing], ignore_index=True, sort=False) if not df_div.empty else df_missing
+            st.warning("Existem itens da lista que não apareceram no upload. Escolha se deseja enviar um novo arquivo ou prosseguir sem contagem.")
+            opcao_nao_contados = st.radio(
+                "O que deseja fazer com os itens não contados?",
+                ["Enviar novo upload para contar itens faltantes", "Prosseguir sem contar estes itens"],
+                index=0
+            )
+            if opcao_nao_contados == "Enviar novo upload para contar itens faltantes":
+                if st.button("🔄 Contar itens faltantes", type="secondary", use_container_width=True):
+                    st.session_state["ic_aceitar_nao_contados"] = False
+                    st.session_state["ic_etapa_nav"] = 2
+                    st.rerun()
+            else:
+                if st.button("⏭️ Prosseguir sem contar", type="secondary", use_container_width=True):
+                    st.session_state["ic_aceitar_nao_contados"] = True
+                    st.session_state["ic_force_reload"] = True
+                    st.rerun()
+
+        MOTIVOS = ["Ajuste de inventário", "Erro de contagem", "Produto em trânsito", "Erro no sistema ERP", "Não contado"]
+        df_div["Justificativa"] = df_div["Codigo"].apply(lambda x: justs_salvas.get(x, "Não contado") if x in missing_codes else justs_salvas.get(x, MOTIVOS[0]))
+        df_div["Status"] = df_div.get("Status", "Divergente")
+        df_edit = st.data_editor(
+            df_div[["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd", "Status", "Justificativa"]],
+            column_config={"Justificativa": st.column_config.SelectboxColumn("Motivo", options=MOTIVOS, required=True)},
+            disabled=["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd", "Status"],
+            use_container_width=True, hide_index=True
+        )
+        if st.button("💾 Salvar Justificativas", type="primary", use_container_width=True):
+            novas_justs = dict(zip(df_edit["Codigo"], df_edit["Justificativa"]))
+            db_salvar_justificativas(engine, empresa, filial, ciclo_ativo['num_ciclo'], novas_justs)
             st.session_state["ic_force_reload"] = True
-            st.session_state["ic_etapa_nav"] = 6
+            if "Ajuste de inventário" in novas_justs.values():
+                st.session_state["ic_etapa_nav"] = 4
+            else:
+                st.session_state["ic_etapa_nav"] = 5
             st.rerun()
 
-    # ── ETAPA 6 — HISTÓRICO ──────────────────────────────────────
-    elif etapa_nav == 6:
-        st.markdown("### 6. Histórico KPMG")
-        if not ciclos:
-            st.info("Nenhum ciclo no histórico.")
+    # ── ETAPA 4 ──────────────────────────────────────────────────────────
+    elif etapa == 4:
+        st.subheader("4. Lançamento de NF via DANFE (PDF)")
+        arq_pdf = st.file_uploader("Upload PDF", type=["pdf"])
+        if arq_pdf:
+            nf_dados, erro = parsear_nf_danfe(arq_pdf.read())
+            if not erro:
+                st.success(f"NF {nf_dados['num_nf']} Detectada.")
+                df_itens_nf = pd.DataFrame(nf_dados["itens"])
+                st.dataframe(df_itens_nf.style.format({"Qtd": "{:,.4f}", "Vl Unit": "R$ {:,.2f}", "Vl Total": "R$ {:,.2f}"}), use_container_width=True)
+                # Validação: itens da NF devem bater com divergentes da etapa anterior
+                codigos_nf = set(str(item.get("Codigo", "")).zfill(6) for item in nf_dados["itens"] if item.get("Codigo"))
+                codigos_divergentes = set(str(k).zfill(6) for k, v in justs_salvas.items() if v == "Ajuste de inventário")
+                if not codigos_nf.issubset(codigos_divergentes):
+                    st.error("Os itens da NF não batem com os itens divergentes marcados para 'Ajuste de inventário'. Verifique a NF ou as justificativas.")
+                    st.write("Itens divergentes:", sorted(codigos_divergentes))
+                    st.write("Itens na NF:", sorted(codigos_nf))
+                else:
+                    if st.button("💾 Vincular NF", type="primary"):
+                        try:
+                            data_iso = datetime.strptime(nf_dados["data"], "%d/%m/%Y").date().isoformat()
+                        except:
+                            data_iso = date.today().isoformat()
+                        db_salvar_nf_ajuste(engine, empresa, filial, ciclo_ativo['num_ciclo'], nf_dados["num_nf"], data_iso, nf_dados["natureza"], nf_dados["itens"])
+                        st.session_state["ic_force_reload"] = True
+                        st.session_state["ic_etapa_nav"] = 5
+                        st.rerun()
+
+    # ── ETAPA 5 ──────────────────────────────────────────────────────────
+    elif etapa == 5:
+        st.subheader("5. Finalizar Ciclo")
+        pending_codes = []
+        if ciclo_ativo:
+            df_score = calcular_score_turbo(df_jlle, tuple(sorted(data["contados"].items())))
+            produtos_esperados = [str(p).zfill(6) for p in ciclo_ativo.get("produtos_lista", [])]
+            if erp_data:
+                df_erp_all = pd.concat([pd.DataFrame(u["dados"]) for u in erp_data])
+                upload_codes = set(df_erp_all["Codigo"].astype(str).str.zfill(6))
+                zero_erp_codes = [str(row["Codigo"]).zfill(6) for _, row in df_erp_all.iterrows()
+                                  if str(row["Codigo"]).zfill(6) in produtos_esperados
+                                  and pd.to_numeric(row.get("Qtd ERP", 0), errors="coerce") == 0
+                                  and pd.to_numeric(row.get("Qtd WMS", 0), errors="coerce") > 0]
+            else:
+                upload_codes = set()
+                zero_erp_codes = []
+            missing_codes = [p for p in produtos_esperados if p not in upload_codes]
+            pending_codes = sorted(set(missing_codes + zero_erp_codes))
+        todos_justificados = all(p in justs_salvas for p in pending_codes) if pending_codes else True
+        if pending_codes and not st.session_state.get("ic_aceitar_nao_contados") and not todos_justificados:
+            st.warning("Ainda existem itens não contados. Faça novo upload ou confirme prosseguir sem contagem antes de encerrar.")
+            st.write("Itens pendentes:", ", ".join(pending_codes))
+            col_a, col_b, col_c = st.columns(3)
+            if col_a.button("🔄 Voltar para upload ERP", use_container_width=True):
+                st.session_state["ic_etapa_nav"] = 2
+                st.rerun()
+            if col_b.button("⏭️ Prosseguir sem contar", type="secondary", use_container_width=True):
+                st.session_state["ic_aceitar_nao_contados"] = True
+                st.session_state["ic_force_reload"] = True
+                st.rerun()
+            if col_c.button("🚫 Cancelar ciclo", type="secondary", use_container_width=True):
+                db_cancelar_ciclo_ativo(engine, empresa, filial)
+                _resetar_estado_ciclo(_cache_key)
+                st.rerun()
         else:
-            for c in ciclos:
-                st.write(f"Cíclico {c['num_ciclo']} - {c['status']}")
+            if pending_codes:
+                st.info("Itens não contados foram aceitos/justificados para este ciclo.")
+            if st.button("🏁 ENCERRAR", type="primary", use_container_width=True):
+                ok = db_fechar_ciclo_ativo(engine, empresa, filial)
+                if not ok:
+                    st.error("Erro ao salvar o histórico do ciclo. Verifique os logs do servidor.")
+                else:
+                    if _cache_key in st.session_state:
+                        del st.session_state[_cache_key]
+                    st.session_state.pop("ic_aceitar_nao_contados", None)
+                    st.session_state["ic_force_reload"] = True
+                    st.session_state["ic_etapa_nav"] = 1
+                    st.rerun()
+
+    # ── ETAPA 6 — HISTÓRICO KPMG ─────────────────────────────────────────
+    elif etapa == 6:
+        st.markdown("### 6. Histórico KPMG")
+
+        ciclos = data.get("ciclos", [])
+        if not ciclos:
+            st.info("Nenhum ciclo no histórico ainda.")
+            return
+
+        # Botões de seleção em massa
+        c_sel, c_des, _ = st.columns([1, 1, 5])
+        if c_sel.button("☑ Selecionar todos", use_container_width=True):
+            st.session_state["ic_hist_todos"] = True
+            st.rerun()
+        if c_des.button("☐ Desmarcar todos", use_container_width=True):
+            st.session_state["ic_hist_todos"] = False
+            st.rerun()
+
+        # Estado padrão: todos selecionados
+        todos_marcados = st.session_state.get("ic_hist_todos", True)
+
+        # Montar tabela
+        rows_tabela = []
+        for c in ciclos:
+            uploads = c.get("uploads", [])
+            n_skus = sum(len(u.get("dados", [])) for u in uploads)
+            if n_skus == 0:
+                n_skus = len(c.get("produtos_lista", []))
+            rows_tabela.append({
+                "✓": todos_marcados,
+                "Nome do Ciclo": c.get("num_ciclo", "—"),
+                "Data": c.get("data_fechamento") or c.get("data_geracao") or "—",
+                "Responsável": c.get("responsavel") or st.session_state.get("_app_operador", "—"),
+                "SKUs Contados": n_skus,
+            })
+
+        df_tabela = pd.DataFrame(rows_tabela)
+        df_edit = st.data_editor(
+            df_tabela,
+            key=f"ic_hist_editor_{todos_marcados}",
+            column_config={
+                "✓": st.column_config.CheckboxColumn("✓", default=True, width="small"),
+                "Nome do Ciclo": st.column_config.TextColumn("Nome do Ciclo"),
+                "Data": st.column_config.TextColumn("Data", width="medium"),
+                "Responsável": st.column_config.TextColumn("Responsável", width="medium"),
+                "SKUs Contados": st.column_config.NumberColumn("SKUs Contados", width="small"),
+            },
+            disabled=["Nome do Ciclo", "Data", "Responsável", "SKUs Contados"],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        ciclos_sel_ids = df_edit[df_edit["✓"]]["Nome do Ciclo"].tolist()
+        if not ciclos_sel_ids:
+            st.warning("Selecione ao menos um ciclo.")
+            return
+
+        n_sel = len(ciclos_sel_ids)
+        st.caption(f"{n_sel} ciclo(s) selecionado(s)")
+
+        if st.button("📄 Gerar PDF KPMG", type="primary", use_container_width=True):
+            ciclos_map = {c["num_ciclo"]: c for c in ciclos}
+            ciclos_sel = [ciclos_map[cid] for cid in ciclos_sel_ids if cid in ciclos_map]
+
+            for c in ciclos_sel:
+                if not c.get("responsavel"):
+                    c["responsavel"] = st.session_state.get("_app_operador", "—")
+                if not c.get("data"):
+                    c["data"] = c.get("data_fechamento") or c.get("data_geracao") or "—"
+
+            with st.spinner("Gerando relatório..."):
+                dfs_rel = {}
+                for c in ciclos_sel:
+                    df_rel = montar_df_relatorio(c.get("uploads", []), df_jlle)
+                    qtd_lista = c.get("qtd_lista", len(c.get("produtos_lista", []))) or 0
+                    c["cobertura_pct"] = (len(df_rel) / qtd_lista * 100) if qtd_lista else 0
+                    c["_justs_pdf"] = db_obter_justificativas(engine, empresa, filial, c["num_ciclo"]) or {}
+                    _nfs_raw = db_obter_nf_ajustes(engine, empresa, filial, c["num_ciclo"]) or {}
+                    _nfs_por_prod = {}
+                    for _nf_num, _nf_info in _nfs_raw.items():
+                        for _item in _nf_info.get("dados", []):
+                            _cod = str(_item.get("Codigo", "")).strip().zfill(6)
+                            if _cod:
+                                _nfs_por_prod[_cod] = _nf_num
+                    c["_nfs_pdf"] = _nfs_por_prod
+                    dfs_rel[c["num_ciclo"]] = df_rel
+
+                pdf_bytes = gerar_pdf_kpmg_consolidado(
+                    ciclos_sel=ciclos_sel,
+                    dfs_rel=dfs_rel,
+                    empresa=empresa,
+                    filial=filial,
+                )
+
+            if pdf_bytes:
+                st.download_button(
+                    "📥 Baixar PDF",
+                    pdf_bytes,
+                    file_name=f"relatorio_kpmg_{date.today().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            else:
+                st.error("Erro ao gerar PDF. Verifique a instalação do reportlab.")
+
+
+
+
+
+
+
+
+
