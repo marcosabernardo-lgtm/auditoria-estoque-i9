@@ -23,7 +23,8 @@ from inventario_db import (
     db_salvar_erp_upload, db_marcar_contados, db_remover_erp_uploads,
     db_cancelar_ciclo_ativo,
     db_salvar_justificativas, db_salvar_nf_ajuste,
-    db_obter_nf_ajustes, db_obter_justificativas
+    db_obter_nf_ajustes, db_obter_justificativas,
+    db_gerar_num_ciclo
 )
 
 PERIODO_KPMG_DIAS = 365
@@ -818,7 +819,7 @@ def render(df_jlle, df_outras, formatar_br):
         st.dataframe(df_lista[cols_lista], use_container_width=True, hide_index=True)
         if not ciclo_ativo:
             if st.button("🚀 Iniciar Ciclo", type="primary", use_container_width=True):
-                num_c = f"{date.today().strftime('%Y%m%d')}-{empresa}-{filial}".replace(" ", "")
+                num_c = db_gerar_num_ciclo(engine, empresa, filial)
                 db_salvar_ciclo_ativo(engine, empresa, filial, {
                     "num_ciclo": num_c,
                     "data_geracao": date.today().strftime("%d/%m/%Y"),
@@ -1041,15 +1042,18 @@ def render(df_jlle, df_outras, formatar_br):
             if pending_codes:
                 st.info("Itens não contados foram aceitos/justificados para este ciclo.")
             if st.button("🏁 ENCERRAR", type="primary", use_container_width=True):
-                db_fechar_ciclo_ativo(engine, empresa, filial)
-                if _cache_key in st.session_state:
-                    del st.session_state[_cache_key]
-                st.session_state.pop("ic_aceitar_nao_contados", None)
-                st.session_state["ic_force_reload"] = True
-                st.session_state["ic_etapa_nav"] = 1
-                st.rerun()
+                ok = db_fechar_ciclo_ativo(engine, empresa, filial)
+                if not ok:
+                    st.error("Erro ao salvar o histórico do ciclo. Verifique os logs do servidor.")
+                else:
+                    if _cache_key in st.session_state:
+                        del st.session_state[_cache_key]
+                    st.session_state.pop("ic_aceitar_nao_contados", None)
+                    st.session_state["ic_force_reload"] = True
+                    st.session_state["ic_etapa_nav"] = 1
+                    st.rerun()
 
-    # ── ETAPA 6 — RELATÓRIO FINAL KPMG (PADRÃO MAIN) ─────────────────────
+    # ── ETAPA 6 — HISTÓRICO KPMG ─────────────────────────────────────────
     elif etapa == 6:
         st.markdown("### 6. Histórico KPMG")
 
@@ -1058,49 +1062,91 @@ def render(df_jlle, df_outras, formatar_br):
             st.info("Nenhum ciclo no histórico ainda.")
             return
 
-        ciclos_map = {c["num_ciclo"]: c for c in ciclos}
-        ciclos_sel_ids = st.multiselect(
-            "Selecione os ciclos para o relatório:",
-            options=list(ciclos_map.keys()),
-            default=list(ciclos_map.keys())
+        # Botões de seleção em massa
+        c_sel, c_des, _ = st.columns([1, 1, 5])
+        if c_sel.button("☑ Selecionar todos", use_container_width=True):
+            st.session_state["ic_hist_todos"] = True
+            st.rerun()
+        if c_des.button("☐ Desmarcar todos", use_container_width=True):
+            st.session_state["ic_hist_todos"] = False
+            st.rerun()
+
+        # Estado padrão: todos selecionados
+        todos_marcados = st.session_state.get("ic_hist_todos", True)
+
+        # Montar tabela
+        rows_tabela = []
+        for c in ciclos:
+            uploads = c.get("uploads", [])
+            n_skus = sum(len(u.get("dados", [])) for u in uploads)
+            if n_skus == 0:
+                n_skus = len(c.get("produtos_lista", []))
+            rows_tabela.append({
+                "✓": todos_marcados,
+                "Nome do Ciclo": c.get("num_ciclo", "—"),
+                "Data": c.get("data_fechamento") or c.get("data_geracao") or "—",
+                "Responsável": c.get("responsavel") or st.session_state.get("_app_operador", "—"),
+                "SKUs Contados": n_skus,
+            })
+
+        df_tabela = pd.DataFrame(rows_tabela)
+        df_edit = st.data_editor(
+            df_tabela,
+            key=f"ic_hist_editor_{todos_marcados}",
+            column_config={
+                "✓": st.column_config.CheckboxColumn("✓", default=True, width="small"),
+                "Nome do Ciclo": st.column_config.TextColumn("Nome do Ciclo"),
+                "Data": st.column_config.TextColumn("Data", width="medium"),
+                "Responsável": st.column_config.TextColumn("Responsável", width="medium"),
+                "SKUs Contados": st.column_config.NumberColumn("SKUs Contados", width="small"),
+            },
+            disabled=["Nome do Ciclo", "Data", "Responsável", "SKUs Contados"],
+            hide_index=True,
+            use_container_width=True,
         )
+
+        ciclos_sel_ids = df_edit[df_edit["✓"]]["Nome do Ciclo"].tolist()
         if not ciclos_sel_ids:
             st.warning("Selecione ao menos um ciclo.")
             return
 
-        ciclos_sel = [ciclos_map[cid] for cid in ciclos_sel_ids]
-
-        for c in ciclos_sel:
-            if not c.get("responsavel"):
-                c["responsavel"] = st.session_state.get("_app_operador", "—")
-            if not c.get("data"):
-                c["data"] = c.get("data_fechamento") or c.get("data_geracao") or "—"
-
-        dfs_rel = {}
-        for c in ciclos_sel:
-            df_rel = montar_df_relatorio(c.get("uploads", []), df_jlle)
-            if c.get("cobertura_pct") is None:
-                qtd_lista = c.get("qtd_lista", len(c.get("produtos_lista", []))) or 0
-                c["cobertura_pct"] = (len(df_rel) / qtd_lista * 100) if qtd_lista else 0
-            c["_justs_pdf"] = db_obter_justificativas(engine, empresa, filial, c["num_ciclo"]) or {}
-            _nfs_raw = db_obter_nf_ajustes(engine, empresa, filial, c["num_ciclo"]) or {}
-            _nfs_por_prod = {}
-            for _nf_num, _nf_info in _nfs_raw.items():
-                for _item in _nf_info.get("dados", []):
-                    _cod = str(_item.get("Codigo", "")).strip().zfill(6)
-                    if _cod:
-                        _nfs_por_prod[_cod] = _nf_num
-            c["_nfs_pdf"] = _nfs_por_prod
-            dfs_rel[c["num_ciclo"]] = df_rel
+        n_sel = len(ciclos_sel_ids)
+        st.caption(f"{n_sel} ciclo(s) selecionado(s)")
 
         if st.button("📄 Gerar PDF KPMG", type="primary", use_container_width=True):
+            ciclos_map = {c["num_ciclo"]: c for c in ciclos}
+            ciclos_sel = [ciclos_map[cid] for cid in ciclos_sel_ids if cid in ciclos_map]
+
+            for c in ciclos_sel:
+                if not c.get("responsavel"):
+                    c["responsavel"] = st.session_state.get("_app_operador", "—")
+                if not c.get("data"):
+                    c["data"] = c.get("data_fechamento") or c.get("data_geracao") or "—"
+
             with st.spinner("Gerando relatório..."):
+                dfs_rel = {}
+                for c in ciclos_sel:
+                    df_rel = montar_df_relatorio(c.get("uploads", []), df_jlle)
+                    qtd_lista = c.get("qtd_lista", len(c.get("produtos_lista", []))) or 0
+                    c["cobertura_pct"] = (len(df_rel) / qtd_lista * 100) if qtd_lista else 0
+                    c["_justs_pdf"] = db_obter_justificativas(engine, empresa, filial, c["num_ciclo"]) or {}
+                    _nfs_raw = db_obter_nf_ajustes(engine, empresa, filial, c["num_ciclo"]) or {}
+                    _nfs_por_prod = {}
+                    for _nf_num, _nf_info in _nfs_raw.items():
+                        for _item in _nf_info.get("dados", []):
+                            _cod = str(_item.get("Codigo", "")).strip().zfill(6)
+                            if _cod:
+                                _nfs_por_prod[_cod] = _nf_num
+                    c["_nfs_pdf"] = _nfs_por_prod
+                    dfs_rel[c["num_ciclo"]] = df_rel
+
                 pdf_bytes = gerar_pdf_kpmg_consolidado(
                     ciclos_sel=ciclos_sel,
                     dfs_rel=dfs_rel,
                     empresa=empresa,
                     filial=filial,
                 )
+
             if pdf_bytes:
                 st.download_button(
                     "📥 Baixar PDF",

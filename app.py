@@ -1,10 +1,8 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import io
 from datetime import datetime as _dt
-from sqlalchemy import create_engine, text
-from processador_movs import tratar_notas_fiscais, buscar_movimentacoes_nuvem, buscar_movimentacoes_por_documento, remover_acentos, limpar_id_produto, limpar_id_geral, get_df_empresas
+from sqlalchemy import create_engine
 from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
@@ -104,6 +102,14 @@ def carregar_auditoria_filtrada(empresa: str, filial: str):
 def formatar_br(valor):
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+@st.cache_data(ttl=300, show_spinner=False)
+def preparar_view(df):
+    if df.empty: return df
+    df_v = df.copy()
+    if "Produto" in df_v.columns: df_v["Qtd Locais"] = df_v.groupby("Produto")["Produto"].transform("count")
+    ordem = ["Status", "Empresa", "Filial", "Localização", "Armazem", "Produto", "Qtd Locais", "Descrição", "Vl Unit", "Saldo ERP (Total)", "Saldo WMS", "Divergência", "Vl Divergência", "Vl Total ERP"]
+    return df_v[[c for c in ordem if c in df_v.columns]]
+
 # ─── SIDEBAR ────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown('<div style="color:#EC6E21;font-weight:700;font-size:1.1rem;margin-bottom:12px;">⚙️ Atualizar Bases</div>', unsafe_allow_html=True)
@@ -127,15 +133,6 @@ with st.sidebar:
                         st.success(f"✅ {len(df_auditoria)} linhas gravadas no banco de TESTE!")
                         st.rerun()
                 except Exception as e: st.error(f"Erro: {e}")
-
-    with st.expander("2. Notas Fiscais"):
-        u_movs = st.file_uploader("Arquivos Protheus", type=["xlsx"], accept_multiple_files=True)
-        if u_movs and st.button("📦 Processar Movimentações"):
-            st.cache_data.clear()
-            df_nf_novo = tratar_notas_fiscais(u_movs)
-            if not df_nf_novo.empty:
-                df_nf_novo.to_sql("movimentacoes", get_engine(), if_exists="append", index=False)
-                st.success("Enviado para banco de TESTE!")
 
     if st.session_state.get("_app_empresa"):
         st.markdown("---")
@@ -190,13 +187,6 @@ if f_code:
 
 dff_jlle = dff_base_abas.copy()
 dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
-
-def preparar_view(df):
-    if df.empty: return df
-    df_v = df.copy()
-    if "Produto" in df_v.columns: df_v["Qtd Locais"] = df_v.groupby("Produto")["Produto"].transform("count")
-    ordem = ["Status", "Empresa", "Filial", "Localização", "Armazem", "Produto", "Qtd Locais", "Descrição", "Vl Unit", "Saldo ERP (Total)", "Saldo WMS", "Divergência", "Vl Divergência", "Vl Total ERP"]
-    return df_v[[c for c in ordem if c in df_v.columns]]
 
 v_jlle_view = preparar_view(dff_auditoria)
 st.session_state["_engine"] = get_engine()
