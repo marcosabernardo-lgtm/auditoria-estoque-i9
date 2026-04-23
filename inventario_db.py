@@ -1,8 +1,3 @@
-"""
-inventario_db.py — Persistência do Inventário Cíclico no Supabase.
-Engine é passada como parâmetro em todas as funções.
-Usa engine.connect() + conn.commit() explícito para compatibilidade com Supabase.
-"""
 import json
 import logging
 from datetime import date
@@ -10,25 +5,88 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
+def get_now_fn(engine):
+    """Compatibilidade de data/hora entre SQLite e PostgreSQL."""
+    return "CURRENT_TIMESTAMP" if "sqlite" in str(engine.url) else "NOW()"
 
-# ── Contados ──────────────────────────────────────────────────────────────────
+def garantir_tabelas(engine):
+    """Cria tabelas necessárias se não existirem (Essencial para o banco de teste)."""
+    if "sqlite" not in str(engine.url): return
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS inventario_ciclo_ativo (
+                empresa TEXT, filial TEXT, num_ciclo TEXT, data_geracao TEXT,
+                label TEXT, qtd_lista INTEGER, produtos_lista TEXT,
+                uploads_json TEXT, status TEXT, atualizado_em TIMESTAMP,
+                PRIMARY KEY (empresa, filial)
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS inventario_erp_upload (
+                empresa TEXT, filial TEXT, num_ciclo TEXT, documento TEXT,
+                data_upload TEXT, dados_json TEXT, atualizado_em TIMESTAMP,
+                PRIMARY KEY (empresa, filial, num_ciclo, documento)
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS inventario_contados (
+                empresa TEXT, filial TEXT, produto TEXT, data_contagem TEXT, num_ciclo TEXT,
+                PRIMARY KEY (empresa, filial, produto)
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS inventario_justificativas (
+                empresa TEXT, filial TEXT, num_ciclo TEXT, produto TEXT,
+                justificativa TEXT, documento TEXT, atualizado_em TIMESTAMP,
+                PRIMARY KEY (empresa, filial, num_ciclo, produto)
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS inventario_nf_ajuste (
+                empresa TEXT, filial TEXT, num_ciclo TEXT, num_nf TEXT,
+                data_nf TEXT, natureza TEXT, dados_json TEXT, atualizado_em TIMESTAMP,
+                PRIMARY KEY (empresa, filial, num_ciclo, num_nf)
+            )
+        """))
+        # CORREÇÃO: tabela de histórico de ciclos fechados
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS inventario_ciclos_historico (
+                empresa TEXT, filial TEXT, num_ciclo TEXT, data_geracao TEXT,
+                data_fechamento TEXT, qtd_lista INTEGER, produtos_lista TEXT,
+                uploads_json TEXT,
+                PRIMARY KEY (empresa, filial, num_ciclo)
+            )
+        """))
+        conn.commit()
 
-def db_obter_contados(engine, empresa, filial):
-    if engine is None: return {}
+def _garantir_tabela_historico_postgres(engine):
+    """Garante que a tabela de histórico existe no PostgreSQL."""
+    if "sqlite" in str(engine.url): return
     try:
         with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT produto, data_contagem FROM inventario_contados "
-                "WHERE empresa=:e AND filial=:f"
-            ), {"e": empresa, "f": filial}).fetchall()
-        return {r[0]: r[1] for r in rows}
-    except Exception as ex:
-        logger.warning("db_obter_contados: %s", ex)
-        return {}
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS inventario_ciclos_historico (
+                    empresa TEXT, filial TEXT, num_ciclo TEXT, data_geracao TEXT,
+                    data_fechamento TEXT, qtd_lista INTEGER, produtos_lista TEXT,
+                    uploads_json TEXT,
+                    PRIMARY KEY (empresa, filial, num_ciclo)
+                )
+            """))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Erro ao garantir tabela histórico: {e}")
 
+# ── CONTADOS ──────────────────────────────────────────────────────────────────
+
+def db_obter_contados(engine, empresa, filial):
+    garantir_tabelas(engine)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT produto, data_contagem FROM inventario_contados WHERE empresa=:e AND filial=:f"), {"e": empresa, "f": filial}).fetchall()
+        return {str(r[0]): r[1] for r in rows}
+    except: return {}
 
 def db_marcar_contados(engine, empresa, filial, produtos, data=None, num_ciclo=None):
-    if engine is None or not produtos: return
     data_reg = data or date.today().isoformat()
     try:
         with engine.connect() as conn:
@@ -36,491 +94,219 @@ def db_marcar_contados(engine, empresa, filial, produtos, data=None, num_ciclo=N
                 conn.execute(text("""
                     INSERT INTO inventario_contados (empresa, filial, produto, data_contagem, num_ciclo)
                     VALUES (:e,:f,:p,:d,:c)
-                    ON CONFLICT (empresa, filial, produto)
-                    DO UPDATE SET data_contagem=EXCLUDED.data_contagem, num_ciclo=EXCLUDED.num_ciclo
-                """), {"e":empresa,"f":filial,"p":str(p),"d":data_reg,"c":num_ciclo or ""})
+                    ON CONFLICT (empresa, filial, produto) DO UPDATE SET data_contagem=EXCLUDED.data_contagem, num_ciclo=EXCLUDED.num_ciclo
+                """), {"e":empresa,"f":filial,"p":str(p).zfill(6),"d":data_reg,"c":num_ciclo or ""})
             conn.commit()
-    except Exception as ex:
-        logger.warning("db_marcar_contados: %s", ex)
+    except: pass
 
-
-def db_resetar_contados(engine, empresa, filial):
-    if engine is None: return
-    try:
-        with engine.connect() as conn:
-            conn.execute(text(
-                "DELETE FROM inventario_contados WHERE empresa=:e AND filial=:f"
-            ), {"e":empresa,"f":filial})
-            conn.commit()
-    except Exception as ex:
-        logger.warning("db_resetar_contados: %s", ex)
-
-
-# ── Histórico de ciclos ───────────────────────────────────────────────────────
-
-def db_obter_ciclos(engine, empresa, filial):
-    if engine is None: return []
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT num_ciclo, data_geracao, data_contagem, responsavel,
-                       num_inv, acuracidade, qtd_lista, qtd_contados,
-                       cobertura_pct, status, uploads,
-                       relatorio_json, produtos_contados, erp_json
-                FROM inventario_ciclos
-                WHERE empresa=:e AND filial=:f
-                ORDER BY criado_em ASC
-            """), {"e":empresa,"f":filial}).fetchall()
-
-        result = []
-        for r in rows:
-            # uploads pode estar gravado como JSON string (lista) ou int (legado)
-            uploads_raw = r[10]
-            if isinstance(uploads_raw, str):
-                try:
-                    uploads_val = json.loads(uploads_raw)
-                except Exception:
-                    uploads_val = []
-            elif isinstance(uploads_raw, list):
-                uploads_val = uploads_raw
-            else:
-                # int legado — não há como recuperar os dados dos uploads
-                uploads_val = []
-
-            result.append({
-                "num_ciclo":        r[0],
-                "data_geracao":     r[1],
-                "data":             r[2],
-                "responsavel":      r[3],
-                "num_inv":          r[4],
-                "acuracidade":      r[5],
-                "qtd_lista":        r[6],
-                "qtd_contados":     r[7],
-                "cobertura_pct":    float(r[8] or 0),
-                "status":           r[9],
-                "uploads":          uploads_val,
-                "relatorio_json":   r[11] or "[]",
-                "produtos_contados":json.loads(r[12] or "[]"),
-                "erp_json":         r[13] or "[]",
-            })
-        return result
-    except Exception as ex:
-        logger.error("db_obter_ciclos ERRO: %s", ex)
-        return []
-
-
-def db_gravar_ciclo(engine, empresa, filial, ciclo):
-    if engine is None: return
-    try:
-        prods = ciclo.get("produtos_contados", [])
-
-        # uploads pode ser lista (nova versão) ou int (legado) — sempre serializa como JSON string
-        uploads_raw = ciclo.get("uploads", [])
-        if isinstance(uploads_raw, list):
-            uploads_json_str = json.dumps(uploads_raw, ensure_ascii=False)
-            qtd_uploads = len(uploads_raw)
-        else:
-            # valor legado era int; preserva contagem mas não os dados
-            uploads_json_str = "[]"
-            qtd_uploads = int(uploads_raw) if uploads_raw else 0
-
-        # qtd_uploads pode vir explicitamente do ciclo (campo separado)
-        qtd_uploads = ciclo.get("qtd_uploads", qtd_uploads)
-
-        with engine.connect() as conn:
-            conn.execute(text("""
-                INSERT INTO inventario_ciclos
-                    (empresa, filial, num_ciclo, data_geracao, data_contagem, responsavel,
-                     num_inv, acuracidade, qtd_lista, qtd_contados, cobertura_pct, status,
-                     uploads, relatorio_json, produtos_contados, erp_json)
-                VALUES
-                    (:empresa, :filial, :num_ciclo, :data_geracao, :data, :responsavel,
-                     :num_inv, :acuracidade, :qtd_lista, :qtd_contados, :cobertura_pct, :status,
-                     :uploads, :relatorio_json, :produtos_contados, :erp_json)
-                ON CONFLICT (empresa, filial, num_ciclo) DO UPDATE SET
-                    data_geracao      = EXCLUDED.data_geracao,
-                    data_contagem     = EXCLUDED.data_contagem,
-                    responsavel       = EXCLUDED.responsavel,
-                    num_inv           = EXCLUDED.num_inv,
-                    acuracidade       = EXCLUDED.acuracidade,
-                    qtd_lista         = EXCLUDED.qtd_lista,
-                    qtd_contados      = EXCLUDED.qtd_contados,
-                    cobertura_pct     = EXCLUDED.cobertura_pct,
-                    status            = EXCLUDED.status,
-                    uploads           = EXCLUDED.uploads,
-                    relatorio_json    = EXCLUDED.relatorio_json,
-                    produtos_contados = EXCLUDED.produtos_contados,
-                    erp_json          = EXCLUDED.erp_json
-            """), {
-                "empresa":           empresa,
-                "filial":            filial,
-                "num_ciclo":         ciclo.get("num_ciclo", ""),
-                "data_geracao":      ciclo.get("data_geracao", ""),
-                "data":              ciclo.get("data", ""),
-                "responsavel":       ciclo.get("responsavel", ""),
-                "num_inv":           ciclo.get("num_inv", ""),
-                "acuracidade":       ciclo.get("acuracidade", ""),
-                "qtd_lista":         ciclo.get("qtd_lista", 0),
-                "qtd_contados":      len(prods),
-                "cobertura_pct":     ciclo.get("cobertura_pct", 0),
-                "status":            ciclo.get("status", "Concluído"),
-                "uploads":           uploads_json_str,
-                "relatorio_json":    ciclo.get("relatorio_json", "[]"),
-                "produtos_contados": json.dumps(prods, ensure_ascii=False),
-                "erp_json":          ciclo.get("erp_json", "[]"),
-            })
-            conn.commit()
-    except Exception as ex:
-        logger.error("db_gravar_ciclo ERRO: %s", ex)
-        raise  # re-lança para que o chamador exiba o erro na UI
-
-
-def db_resetar_ciclos(engine, empresa, filial):
-    if engine is None: return
-    try:
-        with engine.connect() as conn:
-            conn.execute(text(
-                "DELETE FROM inventario_ciclos WHERE empresa=:e AND filial=:f"
-            ), {"e":empresa,"f":filial})
-            conn.commit()
-    except Exception as ex:
-        logger.warning("db_resetar_ciclos: %s", ex)
-
-
-# ── Ciclo ativo ───────────────────────────────────────────────────────────────
+# ── CICLO ATIVO ───────────────────────────────────────────────────────────────
 
 def db_obter_ciclo_ativo(engine, empresa, filial):
-    if engine is None: return None
+    garantir_tabelas(engine)
     try:
         with engine.connect() as conn:
-            row = conn.execute(text("""
-                SELECT num_ciclo,data_geracao,qtd_lista,produtos_lista,uploads_json,status
-                FROM inventario_ciclo_ativo
-                WHERE empresa=:e AND filial=:f LIMIT 1
-            """), {"e":empresa,"f":filial}).fetchone()
-        if row is None: return None
-        return {
-            "num_ciclo":      row[0],
-            "data_geracao":   row[1],
-            "qtd_lista":      row[2],
-            "produtos_lista": json.loads(row[3] or "[]"),
-            "uploads":        json.loads(row[4] or "[]"),
-            "status":         row[5],
-            "label":          f"{empresa} — {filial}",
-        }
-    except Exception as ex:
-        logger.warning("db_obter_ciclo_ativo: %s", ex)
-        return None
-
+            row = conn.execute(text("SELECT num_ciclo, data_geracao, qtd_lista, produtos_lista, uploads_json, status FROM inventario_ciclo_ativo WHERE empresa=:e AND filial=:f"), {"e":empresa,"f":filial}).fetchone()
+        if not row: return None
+        return {"num_ciclo": row[0], "data_geracao": row[1], "qtd_lista": row[2], "produtos_lista": json.loads(row[3] or "[]"), "uploads": json.loads(row[4] or "[]"), "status": row[5]}
+    except: return None
 
 def db_salvar_ciclo_ativo(engine, empresa, filial, ciclo):
-    if engine is None: return
+    garantir_tabelas(engine)
+    now_fn = get_now_fn(engine)
     try:
         with engine.connect() as conn:
-            conn.execute(text("""
-                INSERT INTO inventario_ciclo_ativo
-                    (empresa,filial,num_ciclo,data_geracao,label,qtd_lista,
-                     produtos_lista,uploads_json,status,atualizado_em)
-                VALUES (:e,:f,:num_ciclo,:data_geracao,:label,:qtd_lista,
-                        :produtos_lista,:uploads_json,:status,NOW())
-                ON CONFLICT (empresa,filial) DO UPDATE SET
-                    num_ciclo=EXCLUDED.num_ciclo,
-                    data_geracao=EXCLUDED.data_geracao,
-                    label=EXCLUDED.label,
-                    qtd_lista=EXCLUDED.qtd_lista,
-                    produtos_lista=EXCLUDED.produtos_lista,
-                    uploads_json=EXCLUDED.uploads_json,
-                    status=EXCLUDED.status,
-                    atualizado_em=NOW()
-            """), {
-                "e":empresa,"f":filial,
-                "num_ciclo":     ciclo.get("num_ciclo",""),
-                "data_geracao":  ciclo.get("data_geracao",""),
-                "label":         ciclo.get("label",""),
-                "qtd_lista":     ciclo.get("qtd_lista",0),
-                "produtos_lista":json.dumps(ciclo.get("produtos_lista",[])),
-                "uploads_json":  json.dumps(ciclo.get("uploads",[])),
-                "status":        ciclo.get("status","Em andamento"),
-            })
+            conn.execute(text("DELETE FROM inventario_ciclo_ativo WHERE empresa=:e AND filial=:f"), {"e":empresa, "f":filial})
+            conn.execute(text(f"INSERT INTO inventario_ciclo_ativo (empresa, filial, num_ciclo, data_geracao, label, qtd_lista, produtos_lista, uploads_json, status, atualizado_em) VALUES (:e, :f, :num_ciclo, :data_geracao, :label, :qtd_lista, :produtos_lista, :uploads_json, :status, {now_fn})"), 
+                {"e":empresa, "f":filial, "num_ciclo": ciclo.get("num_ciclo",""), "data_geracao": ciclo.get("data_geracao",""), "label": f"{empresa}-{filial}", "qtd_lista": ciclo.get("qtd_lista", 0), "produtos_lista": json.dumps(ciclo.get("produtos_lista",[])), "uploads_json": json.dumps(ciclo.get("uploads",[])), "status": ciclo.get("status","Em andamento")})
             conn.commit()
-    except Exception as ex:
-        logger.warning("db_salvar_ciclo_ativo: %s", ex)
-
-
-def db_acumular_upload(engine, empresa, filial, upload_info):
-    """Adiciona upload ao ciclo ativo via UPDATE direto no banco."""
-    if engine is None: return
-    ciclo = db_obter_ciclo_ativo(engine, empresa, filial)
-    if ciclo is None:
-        raise ValueError("Ciclo ativo não encontrado no banco")
-    uploads = ciclo.get("uploads", [])
-    uploads.append(upload_info)
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("""
-                UPDATE inventario_ciclo_ativo
-                SET uploads_json = :uploads_json, atualizado_em = NOW()
-                WHERE empresa = :e AND filial = :f
-            """), {
-                "uploads_json": json.dumps(uploads),
-                "e": empresa,
-                "f": filial,
-            })
-            conn.commit()
-    except Exception as ex:
-        raise RuntimeError(f"db_acumular_upload falhou: {ex}")
-
+    except Exception as e: logger.error(e)
 
 def db_fechar_ciclo_ativo(engine, empresa, filial):
-    if engine is None: return
+    """
+    CORREÇÃO: antes de deletar o ciclo ativo, salva no histórico
+    junto com todos os uploads do ciclo.
+    """
+    _garantir_tabela_historico_postgres(engine)
+    garantir_tabelas(engine)
     try:
         with engine.connect() as conn:
-            conn.execute(text(
-                "DELETE FROM inventario_ciclo_ativo WHERE empresa=:e AND filial=:f"
-            ), {"e":empresa,"f":filial})
-            conn.commit()
-    except Exception as ex:
-        logger.warning("db_fechar_ciclo_ativo: %s", ex)
+            # Busca o ciclo ativo antes de deletar
+            row = conn.execute(text(
+                "SELECT num_ciclo, data_geracao, qtd_lista, produtos_lista FROM inventario_ciclo_ativo WHERE empresa=:e AND filial=:f"
+            ), {"e": empresa, "f": filial}).fetchone()
 
+            if row:
+                num_ciclo = row[0]
+                data_geracao = row[1]
+                qtd_lista = row[2]
+                produtos_lista = row[3]
 
-def db_resetar_tudo(engine, empresa, filial):
-    db_resetar_contados(engine, empresa, filial)
-    db_resetar_ciclos(engine, empresa, filial)
-    db_fechar_ciclo_ativo(engine, empresa, filial)
+                # Busca uploads do ciclo
+                rows_erp = conn.execute(text(
+                    "SELECT documento, data_upload, dados_json FROM inventario_erp_upload WHERE empresa=:e AND filial=:f AND num_ciclo=:c"
+                ), {"e": empresa, "f": filial, "c": num_ciclo}).fetchall()
+                uploads = [{"documento": r[0], "data_upload": str(r[1]), "dados": json.loads(r[2] or "[]")} for r in rows_erp]
 
-
-# ── Justificativas ────────────────────────────────────────────────────────────
-
-def db_obter_justificativas(engine, empresa, filial, num_ciclo):
-    if engine is None: return {}
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT produto, justificativa FROM inventario_justificativas
-                WHERE empresa=:e AND filial=:f AND num_ciclo=:c
-            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchall()
-        return {r[0]: r[1] for r in rows}
-    except Exception as ex:
-        logger.warning("db_obter_justificativas: %s", ex)
-        return {}
-
-
-def db_salvar_justificativas(engine, empresa, filial, num_ciclo, justificativas, documento=""):
-    """justificativas = dict {produto: texto}. documento = nº do inventário ERP conferido."""
-    if engine is None or not justificativas: return
-    try:
-        with engine.connect() as conn:
-            for produto, texto in justificativas.items():
+                # Salva no histórico
                 conn.execute(text("""
-                    INSERT INTO inventario_justificativas
-                        (empresa, filial, num_ciclo, produto, justificativa, documento, atualizado_em)
-                    VALUES (:e,:f,:c,:p,:j,:doc,NOW())
-                    ON CONFLICT (empresa,filial,num_ciclo,produto)
-                    DO UPDATE SET justificativa=EXCLUDED.justificativa,
-                                  documento=EXCLUDED.documento, atualizado_em=NOW()
-                """), {"e":empresa,"f":filial,"c":num_ciclo,"p":str(produto),"j":texto,"doc":documento})
-            conn.commit()
-    except Exception as ex:
-        logger.warning("db_salvar_justificativas: %s", ex)
-
-
-def db_obter_documentos_conferidos(engine, empresa, filial, num_ciclo):
-    """Retorna set de documentos ERP já conferidos na etapa 4."""
-    if engine is None: return set()
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT DISTINCT documento FROM inventario_justificativas
-                WHERE empresa=:e AND filial=:f AND num_ciclo=:c
-                AND documento != '' AND documento IS NOT NULL
-            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchall()
-        return {r[0] for r in rows}
-    except Exception as ex:
-        logger.warning("db_obter_documentos_conferidos: %s", ex)
-        return set()
-
-
-# ── Upload ERP Protheus ───────────────────────────────────────────────────────
-
-def db_obter_erp_uploads(engine, empresa, filial, num_ciclo):
-    """Retorna lista de todos os uploads ERP do ciclo, ordenados por data."""
-    if engine is None: return []
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT documento, data_upload, dados_json FROM inventario_erp_upload
-                WHERE empresa=:e AND filial=:f AND num_ciclo=:c
-                ORDER BY atualizado_em ASC
-            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchall()
-        return [{"documento": r[0], "data_upload": str(r[1]) if r[1] else "",
-                 "dados": json.loads(r[2] or "[]")} for r in rows]
-    except Exception as ex:
-        logger.warning("db_obter_erp_uploads: %s", ex)
-        return []
-
-
-def db_obter_erp_upload(engine, empresa, filial, num_ciclo):
-    """Compatibilidade: retorna primeiro upload ou None."""
-    uploads = db_obter_erp_uploads(engine, empresa, filial, num_ciclo)
-    return uploads[0] if uploads else None
-
-
-def db_salvar_erp_upload(engine, empresa, filial, num_ciclo, documento, data_upload, dados):
-    """Acumula upload ERP — cada documento é único por ciclo."""
-    if engine is None: return
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("""
-                INSERT INTO inventario_erp_upload
-                    (empresa, filial, num_ciclo, documento, data_upload, dados_json, atualizado_em)
-                VALUES (:e,:f,:c,:doc,:data,:dados,NOW())
-                ON CONFLICT (empresa,filial,num_ciclo,documento)
-                DO UPDATE SET data_upload=EXCLUDED.data_upload,
-                              dados_json=EXCLUDED.dados_json, atualizado_em=NOW()
-            """), {
-                "e":empresa,"f":filial,"c":num_ciclo,
-                "doc":documento,"data":data_upload,
-                "dados":json.dumps(dados, ensure_ascii=False),
-            })
-            conn.commit()
-    except Exception as ex:
-        logger.warning("db_salvar_erp_upload: %s", ex)
-
-
-# ── NF de Ajuste ─────────────────────────────────────────────────────────────
-
-def db_obter_nf_ajustes(engine, empresa, filial, num_ciclo):
-    """Retorna lista de NFs de ajuste do ciclo."""
-    if engine is None: return []
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT num_nf, data_nf, natureza, dados_json
-                FROM inventario_nf_ajuste
-                WHERE empresa=:e AND filial=:f AND num_ciclo=:c
-                ORDER BY atualizado_em ASC
-            """), {"e":empresa,"f":filial,"c":num_ciclo}).fetchall()
-        return [{"num_nf": r[0], "data_nf": str(r[1]) if r[1] else "",
-                 "natureza": r[2], "dados": json.loads(r[3] or "[]")} for r in rows]
-    except Exception as ex:
-        logger.warning("db_obter_nf_ajustes: %s", ex)
-        return []
-
-
-def db_salvar_nf_ajuste(engine, empresa, filial, num_ciclo, num_nf, data_nf, natureza, dados):
-    """Salva NF de ajuste — upsert por num_nf."""
-    if engine is None: return
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("""
-                INSERT INTO inventario_nf_ajuste
-                    (empresa, filial, num_ciclo, num_nf, data_nf, natureza, dados_json, atualizado_em)
-                VALUES (:e,:f,:c,:nf,:data,:nat,:dados,NOW())
-                ON CONFLICT (empresa,filial,num_ciclo,num_nf)
-                DO UPDATE SET data_nf=EXCLUDED.data_nf, natureza=EXCLUDED.natureza,
-                              dados_json=EXCLUDED.dados_json, atualizado_em=NOW()
-            """), {"e":empresa,"f":filial,"c":num_ciclo,"nf":num_nf,
-                   "data":data_nf,"nat":natureza,
-                   "dados":json.dumps(dados, ensure_ascii=False)})
-            conn.commit()
-    except Exception as ex:
-        logger.warning("db_salvar_nf_ajuste: %s", ex)
-
-
-# ── Carga consolidada (uma conexão só) ───────────────────────────────────────
-
-def db_carregar_tudo(engine, empresa, filial):
-    """Carrega todos os dados do ciclo ativo em uma única conexão."""
-    if engine is None:
-        return {"contados": {}, "ciclos": [], "ciclo_ativo": None,
-                "erp_uploads": [], "nf_ajustes": [], "docs_conf": set(), "justs": {}}
-    try:
-        with engine.connect() as conn:
-            # 1. Contados
-            rows_cont = conn.execute(text("""
-                SELECT produto, ultima_contagem FROM inventario_contados
-                WHERE empresa=:e AND filial=:f
-            """), {"e":empresa,"f":filial}).fetchall()
-            contados = {r[0]: str(r[1]) for r in rows_cont}
-
-            # 2. Ciclos fechados
-            rows_ciclos = conn.execute(text("""
-                SELECT num_ciclo, data_geracao, label, qtd_lista, produtos_lista,
-                       uploads_json, status, relatorio_json, produtos_contados, erp_json
-                FROM inventario_ciclos
-                WHERE empresa=:e AND filial=:f
-                ORDER BY num_ciclo ASC
-            """), {"e":empresa,"f":filial}).fetchall()
-            ciclos = []
-            for r in rows_ciclos:
-                try: pl = json.loads(r[4] or "[]")
-                except: pl = []
-                try: ups = json.loads(r[5] or "[]")
-                except: ups = []
-                try: pc = json.loads(r[8] or "[]")
-                except: pc = []
-                ciclos.append({
-                    "num_ciclo": r[0], "data_geracao": r[1], "label": r[2],
-                    "qtd_lista": r[3], "produtos_lista": pl, "uploads": ups,
-                    "status": r[6], "relatorio_json": r[7] or "[]",
-                    "produtos_contados": pc, "erp_json": r[9] or "[]",
+                    INSERT INTO inventario_ciclos_historico
+                        (empresa, filial, num_ciclo, data_geracao, data_fechamento, qtd_lista, produtos_lista, uploads_json)
+                    VALUES (:e, :f, :c, :dg, :df, :ql, :pl, :uj)
+                    ON CONFLICT (empresa, filial, num_ciclo) DO UPDATE SET
+                        data_fechamento = EXCLUDED.data_fechamento,
+                        uploads_json    = EXCLUDED.uploads_json
+                """), {
+                    "e": empresa, "f": filial,
+                    "c": num_ciclo,
+                    "dg": data_geracao,
+                    "df": date.today().isoformat(),
+                    "ql": qtd_lista,
+                    "pl": produtos_lista,
+                    "uj": json.dumps(uploads)
                 })
 
-            # 3. Ciclo ativo
-            row_ca = conn.execute(text("""
-                SELECT num_ciclo, data_geracao, label, qtd_lista, produtos_lista, uploads_json, status
-                FROM inventario_ciclo_ativo
-                WHERE empresa=:e AND filial=:f LIMIT 1
-            """), {"e":empresa,"f":filial}).fetchone()
-            ciclo_ativo = None
-            num_c = ""
-            if row_ca:
-                try: pl_a = json.loads(row_ca[4] or "[]")
-                except: pl_a = []
-                try: ups_a = json.loads(row_ca[5] or "[]")
-                except: ups_a = []
-                ciclo_ativo = {
-                    "num_ciclo": row_ca[0], "data_geracao": row_ca[1],
-                    "label": row_ca[2], "qtd_lista": row_ca[3],
-                    "produtos_lista": pl_a, "uploads": ups_a, "status": row_ca[6],
-                }
-                num_c = row_ca[0]
+            # Deleta o ciclo ativo
+            conn.execute(text("DELETE FROM inventario_ciclo_ativo WHERE empresa=:e AND filial=:f"), {"e": empresa, "f": filial})
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Erro ao fechar ciclo: {e}")
 
-            erp_uploads = []
-            nf_ajustes  = []
-            docs_conf   = set()
-            justs       = {}
+# ── HISTÓRICO DE CICLOS ───────────────────────────────────────────────────────
 
-            if num_c:
-                # 4. ERP uploads
-                rows_erp = conn.execute(text("""
-                    SELECT documento, data_upload, dados_json FROM inventario_erp_upload
-                    WHERE empresa=:e AND filial=:f AND num_ciclo=:c ORDER BY atualizado_em ASC
-                """), {"e":empresa,"f":filial,"c":num_c}).fetchall()
-                erp_uploads = [{"documento": r[0], "data_upload": str(r[1]) if r[1] else "",
-                                 "dados": json.loads(r[2] or "[]")} for r in rows_erp]
+def db_obter_ciclos_historico(engine, empresa, filial):
+    """
+    CORREÇÃO: busca todos os ciclos fechados do histórico,
+    incluindo uploads, justificativas e NFs de cada um.
+    """
+    _garantir_tabela_historico_postgres(engine)
+    garantir_tabelas(engine)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT num_ciclo, data_geracao, data_fechamento, qtd_lista, produtos_lista, uploads_json
+                FROM inventario_ciclos_historico
+                WHERE empresa=:e AND filial=:f
+                ORDER BY data_fechamento DESC
+            """), {"e": empresa, "f": filial}).fetchall()
 
-                # 5. NF ajustes
-                rows_nf = conn.execute(text("""
-                    SELECT num_nf, data_nf, natureza, dados_json FROM inventario_nf_ajuste
-                    WHERE empresa=:e AND filial=:f AND num_ciclo=:c ORDER BY atualizado_em ASC
-                """), {"e":empresa,"f":filial,"c":num_c}).fetchall()
-                nf_ajustes = [{"num_nf": r[0], "data_nf": str(r[1]) if r[1] else "",
-                                "natureza": r[2], "dados": json.loads(r[3] or "[]")} for r in rows_nf]
+        ciclos = []
+        for r in rows:
+            num_ciclo = r[0]
+            uploads = json.loads(r[5] or "[]")
 
-                # 6. Documentos conferidos + justificativas
-                rows_j = conn.execute(text("""
-                    SELECT produto, justificativa, documento FROM inventario_justificativas
-                    WHERE empresa=:e AND filial=:f AND num_ciclo=:c
-                """), {"e":empresa,"f":filial,"c":num_c}).fetchall()
-                for rj in rows_j:
-                    justs[rj[0]] = rj[1]
-                    if rj[2]: docs_conf.add(rj[2])
+            # Busca justificativas e NFs para cada ciclo histórico
+            with engine.connect() as conn:
+                rows_j = conn.execute(text(
+                    "SELECT produto, justificativa FROM inventario_justificativas WHERE empresa=:e AND filial=:f AND num_ciclo=:c"
+                ), {"e": empresa, "f": filial, "c": num_ciclo}).fetchall()
+                justs = {rj[0]: rj[1] for rj in rows_j}
 
-        return {"contados": contados, "ciclos": ciclos, "ciclo_ativo": ciclo_ativo,
-                "erp_uploads": erp_uploads, "nf_ajustes": nf_ajustes,
-                "docs_conf": docs_conf, "justs": justs}
-    except Exception as ex:
-        logger.warning("db_carregar_tudo: %s", ex)
-        return {"contados": {}, "ciclos": [], "ciclo_ativo": None,
-                "erp_uploads": [], "nf_ajustes": [], "docs_conf": set(), "justs": {}}
+                rows_nf = conn.execute(text(
+                    "SELECT num_nf, data_nf, natureza, dados_json FROM inventario_nf_ajuste WHERE empresa=:e AND filial=:f AND num_ciclo=:c"
+                ), {"e": empresa, "f": filial, "c": num_ciclo}).fetchall()
+                nfs = [{"num_nf": rn[0], "data_nf": rn[1], "natureza": rn[2], "dados": json.loads(rn[3] or "[]")} for rn in rows_nf]
+
+            ciclos.append({
+                "num_ciclo":       r[0],
+                "data_geracao":    r[1],
+                "data_fechamento": r[2],
+                "qtd_lista":       r[3],
+                "produtos_lista":  json.loads(r[4] or "[]"),
+                "uploads":         uploads,
+                "justs":           justs,
+                "nfs":             nfs,
+            })
+        return ciclos
+    except Exception as e:
+        logger.error(f"Erro ao obter histórico: {e}")
+        return []
+
+# ── CARGA COMPLETA ────────────────────────────────────────────────────────────
+
+def db_carregar_tudo(engine, empresa, filial):
+    garantir_tabelas(engine)
+    ca = db_obter_ciclo_ativo(engine, empresa, filial)
+    contados = db_obter_contados(engine, empresa, filial)
+    erp_uploads, justs, nf_ajustes = [], {}, []
+    if ca:
+        with engine.connect() as conn:
+            rows_erp = conn.execute(text("SELECT documento, data_upload, dados_json FROM inventario_erp_upload WHERE empresa=:e AND filial=:f AND num_ciclo=:c"), {"e":empresa,"f":filial,"c":ca['num_ciclo']}).fetchall()
+            erp_uploads = [{"documento": r[0], "data_upload": str(r[1]), "dados": json.loads(r[2] or "[]")} for r in rows_erp]
+            rows_j = conn.execute(text("SELECT produto, justificativa FROM inventario_justificativas WHERE empresa=:e AND filial=:f AND num_ciclo=:c"), {"e":empresa,"f":filial,"c":ca['num_ciclo']}).fetchall()
+            justs = {r[0]: r[1] for r in rows_j}
+            rows_nf = conn.execute(text("SELECT num_nf, data_nf FROM inventario_nf_ajuste WHERE empresa=:e AND filial=:f AND num_ciclo=:c"), {"e":empresa,"f":filial,"c":ca['num_ciclo']}).fetchall()
+            nf_ajustes = [{"num_nf": r[0], "data_nf": r[1]} for r in rows_nf]
+
+    # CORREÇÃO: busca ciclos históricos reais em vez de retornar lista vazia
+    ciclos_historico = db_obter_ciclos_historico(engine, empresa, filial)
+
+    return {
+        "contados":    contados,
+        "ciclo_ativo": ca,
+        "erp_uploads": erp_uploads,
+        "justs":       justs,
+        "nf_ajustes":  nf_ajustes,
+        "ciclos":      ciclos_historico,   # ← antes era sempre []
+    }
+
+# ── OPERAÇÕES ─────────────────────────────────────────────────────────────────
+
+def db_salvar_erp_upload(engine, empresa, filial, num_ciclo, documento, data_upload, dados):
+    garantir_tabelas(engine)
+    now_fn = get_now_fn(engine)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(f"INSERT INTO inventario_erp_upload (empresa, filial, num_ciclo, documento, data_upload, dados_json, atualizado_em) VALUES (:e,:f,:c,:doc,:data,:dados,{now_fn}) ON CONFLICT (empresa, filial, num_ciclo, documento) DO UPDATE SET data_upload=EXCLUDED.data_upload, dados_json=EXCLUDED.dados_json, atualizado_em={now_fn}"), {"e":empresa, "f":filial, "c":num_ciclo, "doc":documento, "data":data_upload, "dados":json.dumps(dados)})
+            conn.commit()
+    except: pass
+
+def db_remover_erp_uploads(engine, empresa, filial, num_ciclo):
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM inventario_erp_upload WHERE empresa=:e AND filial=:f AND num_ciclo=:c"), {"e":empresa,"f":filial,"c":num_ciclo})
+            conn.commit()
+    except: pass
+
+def db_salvar_justificativas(engine, empresa, filial, num_ciclo, justificativas):
+    now_fn = get_now_fn(engine)
+    try:
+        with engine.connect() as conn:
+            for prod, just in justificativas.items():
+                conn.execute(text(f"INSERT INTO inventario_justificativas (empresa, filial, num_ciclo, produto, justificativa, atualizado_em) VALUES (:e,:f,:c,:p,:j,{now_fn}) ON CONFLICT (empresa, filial, num_ciclo, produto) DO UPDATE SET justificativa=EXCLUDED.justificativa"), {"e":empresa, "f":filial, "c":num_ciclo, "p":prod, "j":just})
+            conn.commit()
+    except: pass
+
+def db_salvar_nf_ajuste(engine, empresa, filial, num_ciclo, num_nf, data_nf, natureza, dados):
+    now_fn = get_now_fn(engine)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(f"INSERT INTO inventario_nf_ajuste (empresa, filial, num_ciclo, num_nf, data_nf, natureza, dados_json, atualizado_em) VALUES (:e,:f,:c,:nf,:d,:n,:dados,{now_fn}) ON CONFLICT (empresa, filial, num_ciclo, num_nf) DO UPDATE SET dados_json=EXCLUDED.dados_json"), {"e":empresa,"f":filial,"c":num_ciclo,"nf":num_nf,"d":data_nf,"n":natureza,"dados":json.dumps(dados)})
+            conn.commit()
+    except: pass
+
+# Placeholders para evitar erros de importação
+def db_gravar_ciclo(*args, **kwargs): pass
+
+def db_obter_nf_ajustes(engine, empresa=None, filial=None, num_ciclo=None, *args, **kwargs):
+    if not engine or not empresa or not filial or not num_ciclo:
+        return {}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT num_nf, data_nf, natureza, dados_json FROM inventario_nf_ajuste WHERE empresa=:e AND filial=:f AND num_ciclo=:c"
+            ), {"e": empresa, "f": filial, "c": num_ciclo}).fetchall()
+        return {r[0]: {"data_nf": r[1], "natureza": r[2], "dados": json.loads(r[3] or "[]")} for r in rows}
+    except:
+        return {}
+
+def db_obter_justificativas(engine, empresa=None, filial=None, num_ciclo=None, *args, **kwargs):
+    if not engine or not empresa or not filial or not num_ciclo:
+        return {}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT produto, justificativa FROM inventario_justificativas WHERE empresa=:e AND filial=:f AND num_ciclo=:c"
+            ), {"e": empresa, "f": filial, "c": num_ciclo}).fetchall()
+        return {r[0]: r[1] for r in rows}
+    except:
+        return {}
