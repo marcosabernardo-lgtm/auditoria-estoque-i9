@@ -57,6 +57,15 @@ def garantir_tabelas(engine):
                 PRIMARY KEY (empresa, filial, num_ciclo)
             )
         """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS inventario_ajustes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa TEXT, filial TEXT, num_nf TEXT, data_nf TEXT,
+                natureza TEXT, justificativa TEXT, dados_json TEXT,
+                operador TEXT, origem TEXT, num_ciclo TEXT,
+                criado_em TIMESTAMP
+            )
+        """))
         _garantir_coluna(engine, "inventario_ciclo_ativo", "responsavel TEXT")
         _garantir_coluna(engine, "inventario_ciclos_historico", "responsavel TEXT")
         conn.commit()
@@ -93,6 +102,26 @@ def _garantir_tabela_historico_postgres(engine):
             conn.commit()
     except Exception as e:
         logger.error(f"Erro ao garantir tabela histórico: {e}")
+
+def garantir_tabela_ajustes(engine):
+    """Cria inventario_ajustes se não existir (SQLite e PostgreSQL)."""
+    if "sqlite" in str(engine.url):
+        garantir_tabelas(engine)
+        return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS inventario_ajustes (
+                    id SERIAL PRIMARY KEY,
+                    empresa TEXT, filial TEXT, num_nf TEXT, data_nf DATE,
+                    natureza TEXT, justificativa TEXT, dados_json TEXT,
+                    operador TEXT, origem TEXT, num_ciclo TEXT,
+                    criado_em TIMESTAMP
+                )
+            """))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Erro ao garantir tabela ajustes: {e}")
 
 # ── GERAÇÃO DE NUM_CICLO ÚNICO ────────────────────────────────────────────────
 

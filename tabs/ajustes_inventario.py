@@ -4,6 +4,7 @@ import io
 import json
 from datetime import date, datetime
 from sqlalchemy import text
+from inventario_db import get_now_fn, garantir_tabela_ajustes
 
 
 # ── Parser DANFE (reutiliza o mesmo do inventário cíclico) ───────────────────
@@ -47,13 +48,15 @@ def parsear_nf_danfe(arquivo_bytes):
 def db_salvar_ajuste(engine, empresa, filial, num_nf, data_nf, natureza,
                      justificativa, dados, operador, origem="manual", num_ciclo=""):
     if engine is None: return False
+    garantir_tabela_ajustes(engine)
+    now_fn = get_now_fn(engine)
     try:
         with engine.connect() as conn:
-            conn.execute(text("""
+            conn.execute(text(f"""
                 INSERT INTO inventario_ajustes
                     (empresa, filial, num_nf, data_nf, natureza, justificativa,
                      dados_json, operador, origem, num_ciclo, criado_em)
-                VALUES (:e,:f,:nf,:data,:nat,:just,:dados,:op,:orig,:ciclo,NOW())
+                VALUES (:e,:f,:nf,:data,:nat,:just,:dados,:op,:orig,:ciclo,{now_fn})
             """), {"e":empresa,"f":filial,"nf":num_nf,"data":data_nf,"nat":natureza,
                    "just":justificativa,"dados":json.dumps(dados, ensure_ascii=False),
                    "op":operador,"orig":origem,"ciclo":num_ciclo})
