@@ -195,6 +195,23 @@ def db_obter_ciclo_ativo(engine, empresa, filial):
         }
     except: return None
 
+def db_atualizar_lista_ciclo(engine, empresa, filial, nova_lista):
+    """Atualiza apenas produtos_lista e qtd_lista sem tocar nos uploads ou contados."""
+    garantir_tabelas(engine)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                UPDATE inventario_ciclo_ativo
+                SET produtos_lista=:pl, qtd_lista=:ql
+                WHERE empresa=:e AND filial=:f
+            """), {"pl": json.dumps(nova_lista), "ql": len(nova_lista),
+                   "e": empresa, "f": filial})
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao atualizar lista: {e}")
+        return False
+
 def db_salvar_ciclo_ativo(engine, empresa, filial, ciclo):
     _garantir_tabela_historico_postgres(engine)
     garantir_tabelas(engine)

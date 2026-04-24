@@ -22,6 +22,7 @@ from inventario_db import (
     db_salvar_ciclo_ativo, db_fechar_ciclo_ativo, db_carregar_tudo,
     db_salvar_erp_upload, db_marcar_contados, db_remover_erp_uploads,
     db_cancelar_ciclo_ativo, db_excluir_ciclo_historico,
+    db_atualizar_lista_ciclo,
     db_salvar_justificativas, db_salvar_nf_ajuste,
     db_obter_nf_ajustes, db_obter_justificativas,
     db_gerar_num_ciclo
@@ -824,21 +825,19 @@ def render(df_jlle, df_outras, formatar_br):
             col_salvar, col_avancar = st.columns(2)
             with col_salvar:
                 if st.button("💾 Salvar alterações na lista", use_container_width=True):
-                    # Produtos mantidos (Incluir = True) + novos adicionados
                     prods_mantidos = df_editado[df_editado["Incluir"]]["Produto"].astype(str).str.zfill(6).tolist()
                     prods_adicionados = [c for c in novos_codes if c not in prods_mantidos]
                     nova_lista = prods_mantidos + prods_adicionados
                     if not nova_lista:
                         st.error("A lista não pode ficar vazia.")
                     else:
-                        db_salvar_ciclo_ativo(engine, empresa, filial, {
-                            **{k: ciclo_ativo.get(k) for k in ("num_ciclo", "data_geracao", "responsavel", "status")},
-                            "produtos_lista": nova_lista,
-                            "qtd_lista": len(nova_lista),
-                        })
-                        _resetar_estado_ciclo(_cache_key)
-                        st.success(f"✅ Lista atualizada com {len(nova_lista)} produto(s).")
-                        st.rerun()
+                        ok = db_atualizar_lista_ciclo(engine, empresa, filial, nova_lista)
+                        if ok:
+                            st.session_state["ic_force_reload"] = True
+                            st.success(f"✅ Lista atualizada com {len(nova_lista)} produto(s).")
+                            st.rerun()
+                        else:
+                            st.error("Erro ao salvar. Tente novamente.")
             with col_avancar:
                 if st.button("➡️ Continuar para Upload ERP", type="primary", use_container_width=True):
                     st.session_state["ic_etapa_nav"] = 2
