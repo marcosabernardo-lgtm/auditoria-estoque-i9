@@ -820,11 +820,13 @@ def render(df_jlle, df_outras, formatar_br):
         if not ciclo_ativo:
             if st.button("🚀 Iniciar Ciclo", type="primary", use_container_width=True):
                 num_c = db_gerar_num_ciclo(engine, empresa, filial)
+                prods = df_lista["Produto"].astype(str).tolist()
                 db_salvar_ciclo_ativo(engine, empresa, filial, {
                     "num_ciclo": num_c,
                     "data_geracao": date.today().strftime("%d/%m/%Y"),
                     "responsavel": st.session_state.get("_app_operador", ""),
-                    "produtos_lista": df_lista["Produto"].astype(str).tolist()
+                    "produtos_lista": prods,
+                    "qtd_lista": len(prods),
                 })
                 # Limpar cache e estado para garantir dados frescos do novo ciclo
                 _resetar_estado_ciclo(_cache_key)
@@ -1168,7 +1170,7 @@ def render(df_jlle, df_outras, formatar_br):
                     dfs_rel = {}
                     for c in ciclos_sel:
                         df_rel = montar_df_relatorio(c.get("uploads", []), df_jlle)
-                        qtd_lista = c.get("qtd_lista", len(c.get("produtos_lista", []))) or 0
+                        qtd_lista = c.get("qtd_lista") or len(c.get("produtos_lista", [])) or 0
                         c["cobertura_pct"] = (len(df_rel) / qtd_lista * 100) if qtd_lista else 0
                         c["_justs_pdf"] = db_obter_justificativas(engine, empresa, filial, c["num_ciclo"]) or {}
                         _nfs_raw = db_obter_nf_ajustes(engine, empresa, filial, c["num_ciclo"]) or {}
