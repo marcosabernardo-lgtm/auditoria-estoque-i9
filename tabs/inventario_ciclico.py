@@ -744,7 +744,7 @@ def render(df_jlle, df_outras, formatar_br):
         else:
             if i == 1: done = bool(ciclo_ativo)
             elif i == 2: done = bool(erp_data)
-            elif i == 3: done = bool(justs_salvas)
+            elif i == 3: done = bool(justs_salvas) or (etapa > 3)
             elif i == 4: done = bool(nf_ajustes) or (etapa > 4)
             elif i == 5: done = (not ciclo_ativo and etapa >= 5)
             else: done = False
