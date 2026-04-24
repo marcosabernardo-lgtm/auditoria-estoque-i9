@@ -957,23 +957,30 @@ def render(df_jlle, df_outras, formatar_br):
                     st.rerun()
 
         MOTIVOS = ["Ajuste de inventário", "Erro de contagem", "Produto em trânsito", "Erro no sistema ERP", "Não contado"]
-        df_div["Justificativa"] = df_div["Codigo"].apply(lambda x: justs_salvas.get(x, "Não contado") if x in missing_codes else justs_salvas.get(x, MOTIVOS[0]))
-        df_div["Status"] = df_div.get("Status", "Divergente")
-        df_edit = st.data_editor(
-            df_div[["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd", "Status", "Justificativa"]],
-            column_config={"Justificativa": st.column_config.SelectboxColumn("Motivo", options=MOTIVOS, required=True)},
-            disabled=["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd", "Status"],
-            use_container_width=True, hide_index=True
-        )
-        if st.button("💾 Salvar Justificativas", type="primary", use_container_width=True):
-            novas_justs = dict(zip(df_edit["Codigo"], df_edit["Justificativa"]))
-            db_salvar_justificativas(engine, empresa, filial, ciclo_ativo['num_ciclo'], novas_justs)
-            st.session_state["ic_force_reload"] = True
-            if "Ajuste de inventário" in novas_justs.values():
-                st.session_state["ic_etapa_nav"] = 4
-            else:
+
+        if df_div.empty:
+            st.success("✅ Nenhuma divergência encontrada. Tudo confere!")
+            if st.button("➡️ Seguir para Fechar Ciclo", type="primary", use_container_width=True):
                 st.session_state["ic_etapa_nav"] = 5
-            st.rerun()
+                st.rerun()
+        else:
+            df_div["Justificativa"] = df_div["Codigo"].apply(lambda x: justs_salvas.get(x, "Não contado") if x in missing_codes else justs_salvas.get(x, MOTIVOS[0]))
+            df_div["Status"] = df_div.get("Status", "Divergente")
+            df_edit = st.data_editor(
+                df_div[["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd", "Status", "Justificativa"]],
+                column_config={"Justificativa": st.column_config.SelectboxColumn("Motivo", options=MOTIVOS, required=True)},
+                disabled=["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd", "Status"],
+                use_container_width=True, hide_index=True
+            )
+            if st.button("💾 Salvar Justificativas", type="primary", use_container_width=True):
+                novas_justs = dict(zip(df_edit["Codigo"], df_edit["Justificativa"]))
+                db_salvar_justificativas(engine, empresa, filial, ciclo_ativo['num_ciclo'], novas_justs)
+                st.session_state["ic_force_reload"] = True
+                if "Ajuste de inventário" in novas_justs.values():
+                    st.session_state["ic_etapa_nav"] = 4
+                else:
+                    st.session_state["ic_etapa_nav"] = 5
+                st.rerun()
 
     # ── ETAPA 4 ──────────────────────────────────────────────────────────
     elif etapa == 4:
