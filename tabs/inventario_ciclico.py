@@ -812,7 +812,7 @@ def render(df_jlle, df_outras, formatar_br):
                     if nao_enc:
                         st.warning(f"Não encontrados no catálogo: {', '.join(nao_enc)}")
 
-            col_salvar, col_avancar = st.columns(2)
+            col_salvar, col_excel, col_avancar = st.columns([2, 1, 2])
             with col_salvar:
                 if st.button("💾 Salvar alterações na lista", use_container_width=True):
                     prods_mantidos = df_editado[df_editado["Incluir"]]["Produto"].astype(str).str.zfill(6).tolist()
@@ -828,6 +828,17 @@ def render(df_jlle, df_outras, formatar_br):
                             st.rerun()
                         else:
                             st.error("Erro ao salvar. Tente novamente.")
+            with col_excel:
+                _buf = io.BytesIO()
+                with pd.ExcelWriter(_buf, engine="xlsxwriter") as _w:
+                    df_lista_full[cols_ed].to_excel(_w, index=False, sheet_name="Lista")
+                st.download_button(
+                    "📥 Excel",
+                    data=_buf.getvalue(),
+                    file_name=f"lista_{ciclo_ativo['num_ciclo']}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
             with col_avancar:
                 if st.button("➡️ Continuar para Upload ERP", type="primary", use_container_width=True):
                     st.session_state["ic_etapa_nav"] = 2
