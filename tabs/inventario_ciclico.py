@@ -1174,9 +1174,11 @@ def render(df_jlle, df_outras, formatar_br):
                         c["data"] = c.get("data_fechamento") or c.get("data_geracao") or "—"
 
                 with st.spinner("Gerando relatório..."):
+                    # df_outras = df_base completo sem filtros de status/busca
+                    _df_cat = df_outras if (df_outras is not None and not df_outras.empty) else df_jlle
                     total_catalogo = (
-                        df_jlle["Produto"].nunique()
-                        if df_jlle is not None and not df_jlle.empty and "Produto" in df_jlle.columns
+                        _df_cat["Produto"].nunique()
+                        if _df_cat is not None and not _df_cat.empty and "Produto" in _df_cat.columns
                         else 0
                     )
                     dfs_rel = {}
