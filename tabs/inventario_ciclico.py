@@ -731,16 +731,6 @@ def render(df_jlle, df_outras, formatar_br):
             st.session_state["ic_etapa_nav"] = 5
     
     etapa = st.session_state["ic_etapa_nav"]
-    if ciclo_ativo:
-        if not erp_data and etapa < 2:
-            etapa = 2
-        elif erp_data and not justs_salvas and etapa < 3:
-            etapa = 3
-        elif justs_salvas and not nf_ajustes and etapa < 4:
-            etapa = 4
-        elif nf_ajustes and etapa < 5:
-            etapa = 5
-        st.session_state["ic_etapa_nav"] = etapa
 
     st.markdown("### Fluxo de Inventário")
     cols = st.columns(6)
