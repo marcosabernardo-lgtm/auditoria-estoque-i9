@@ -354,7 +354,7 @@ def gerar_pdf_kpmg(ciclo, df_rel, empresa, filial):
     )
 
 
-def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
+def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial, total_catalogo=0):
     buf    = io.BytesIO()
     doc    = SimpleDocTemplate(buf, pagesize=landscape(A4),
                                leftMargin=1.5*cm, rightMargin=1.5*cm,
@@ -424,7 +424,14 @@ def gerar_pdf_kpmg_consolidado(ciclos_sel, dfs_rel, empresa, filial):
 
     vals_validos = [v for v in acur_por_ciclo.values() if v is not None]
     acur_media = f"{sum(vals_validos)/len(vals_validos):.1f}%" if vals_validos else "N/D"
-    cobertura_max = max((c.get("cobertura_pct",0) for c in ciclos_sel), default=0)
+
+    # Cobertura acumulada: união dos SKUs contados em todos os ciclos selecionados / total catálogo
+    skus_contados_union = set()
+    for df_c in dfs_rel.values():
+        if not df_c.empty and "Produto" in df_c.columns:
+            skus_contados_union.update(df_c["Produto"].astype(str).tolist())
+    cobertura_max = (len(skus_contados_union) / total_catalogo * 100) if total_catalogo else 0
+
     n_ciclos = len(ciclos_sel)
 
     # ── CAPA ──
@@ -1167,11 +1174,15 @@ def render(df_jlle, df_outras, formatar_br):
                         c["data"] = c.get("data_fechamento") or c.get("data_geracao") or "—"
 
                 with st.spinner("Gerando relatório..."):
+                    total_catalogo = (
+                        df_jlle["Produto"].nunique()
+                        if df_jlle is not None and not df_jlle.empty and "Produto" in df_jlle.columns
+                        else 0
+                    )
                     dfs_rel = {}
                     for c in ciclos_sel:
                         df_rel = montar_df_relatorio(c.get("uploads", []), df_jlle)
-                        qtd_lista = c.get("qtd_lista") or len(c.get("produtos_lista", [])) or 0
-                        c["cobertura_pct"] = (len(df_rel) / qtd_lista * 100) if qtd_lista else 0
+                        c["cobertura_pct"] = (len(df_rel) / total_catalogo * 100) if total_catalogo else 0
                         c["_justs_pdf"] = db_obter_justificativas(engine, empresa, filial, c["num_ciclo"]) or {}
                         _nfs_raw = db_obter_nf_ajustes(engine, empresa, filial, c["num_ciclo"]) or {}
                         _nfs_por_prod = {}
@@ -1188,6 +1199,7 @@ def render(df_jlle, df_outras, formatar_br):
                         dfs_rel=dfs_rel,
                         empresa=empresa,
                         filial=filial,
+                        total_catalogo=total_catalogo,
                     )
 
                 if pdf_bytes:
