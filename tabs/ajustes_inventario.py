@@ -30,14 +30,14 @@ def parsear_nf_danfe(arquivo_bytes):
         if m: result["natureza"] = m.group(1)
     itens = []
     padrao = re.compile(
-        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+([\d,]+)\s+([\d,]+(?:\d{3})?)\s+([\d,]+)',
+        r'(\d{6})\s+(.+?)\s+\d{8}\s+\d{3}\s+\d{4}\s+\w+\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)',
         re.MULTILINE)
     for m in padrao.finditer(text_pdf):
         itens.append({
             "Codigo": m.group(1), "Descricao": m.group(2).strip(),
-            "Qtd": float(m.group(3).replace(",",".")),
-            "Vl Unit": float(m.group(4).replace(",",".")),
-            "Vl Total": float(m.group(5).replace(",",".")),
+            "Qtd":     float(m.group(3).replace(".","").replace(",",".")),
+            "Vl Unit": float(m.group(4).replace(".","").replace(",",".")),
+            "Vl Total":float(m.group(5).replace(".","").replace(",",".")),
         })
     result["itens"] = itens
     return result, None
