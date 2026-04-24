@@ -782,26 +782,76 @@ def render(df_jlle, df_outras, formatar_br):
                 _resetar_estado_ciclo(_cache_key)
                 st.rerun()
         
-        # PRIORIDADE: manual
-        if codigos_manuais:
+        # PRIORIDADE: ciclo ativo (modo edição da lista)
+        if ciclo_ativo:
+            prods_fixos = [str(p).zfill(6) for p in ciclo_ativo.get("produtos_lista", [])]
+            contados_set = set(data["contados"].keys())
+
+            df_lista_full = df_score[
+                df_score["Produto"].astype(str).str.zfill(6).isin(prods_fixos)
+            ].copy()
+            df_lista_full["Produto"] = df_lista_full["Produto"].astype(str).str.zfill(6)
+            df_lista_full["Contado"] = df_lista_full["Produto"].isin(contados_set)
+            df_lista_full["Incluir"] = True
+
+            desc_col = next((c for c in df_lista_full.columns if "Descr" in str(c)), None)
+            cols_ed = ["Incluir", "Produto"]
+            if desc_col: cols_ed.append(desc_col)
+            cols_ed += [c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Contado", "Score"] if c in df_lista_full.columns]
+
+            st.caption(f"📋 Lista atual: **{len(prods_fixos)}** produto(s) — desmarque os que deseja remover")
+            df_editado = st.data_editor(
+                df_lista_full[cols_ed],
+                column_config={"Incluir": st.column_config.CheckboxColumn("Incluir", default=True, width="small"),
+                               "Contado": st.column_config.CheckboxColumn("Contado", width="small")},
+                disabled=[c for c in cols_ed if c != "Incluir"],
+                use_container_width=True, hide_index=True, key="ic_lista_editor"
+            )
+
+            with st.expander("➕ Adicionar produtos à lista"):
+                novos_txt = st.text_area("Códigos (um por linha ou separados por vírgula/espaço)",
+                                         key="ic_add_prods", height=80)
+                novos_codes = [c.strip().zfill(6) for c in novos_txt.replace(",", " ").split() if c.strip()]
+                if novos_codes:
+                    df_novos = df_score[df_score["Produto"].astype(str).str.zfill(6).isin(novos_codes)]
+                    nao_enc = [c for c in novos_codes if c not in df_score["Produto"].astype(str).str.zfill(6).tolist()]
+                    if not df_novos.empty:
+                        st.dataframe(df_novos[["Produto"] + ([desc_col] if desc_col else [])],
+                                     use_container_width=True, hide_index=True)
+                    if nao_enc:
+                        st.warning(f"Não encontrados no catálogo: {', '.join(nao_enc)}")
+
+            col_salvar, col_avancar = st.columns(2)
+            with col_salvar:
+                if st.button("💾 Salvar alterações na lista", use_container_width=True):
+                    # Produtos mantidos (Incluir = True) + novos adicionados
+                    prods_mantidos = df_editado[df_editado["Incluir"]]["Produto"].astype(str).str.zfill(6).tolist()
+                    prods_adicionados = [c for c in novos_codes if c not in prods_mantidos]
+                    nova_lista = prods_mantidos + prods_adicionados
+                    if not nova_lista:
+                        st.error("A lista não pode ficar vazia.")
+                    else:
+                        db_salvar_ciclo_ativo(engine, empresa, filial, {
+                            **{k: ciclo_ativo.get(k) for k in ("num_ciclo", "data_geracao", "responsavel", "status")},
+                            "produtos_lista": nova_lista,
+                            "qtd_lista": len(nova_lista),
+                        })
+                        _resetar_estado_ciclo(_cache_key)
+                        st.success(f"✅ Lista atualizada com {len(nova_lista)} produto(s).")
+                        st.rerun()
+            with col_avancar:
+                if st.button("➡️ Continuar para Upload ERP", type="primary", use_container_width=True):
+                    st.session_state["ic_etapa_nav"] = 2
+                    st.rerun()
+
+            # df_lista apenas para o dataframe de exibição abaixo (não usado — renderizado acima)
+            df_lista = df_lista_full
+
+        elif codigos_manuais:
             df_lista = df_score[
                 df_score["Produto"].astype(str).str.zfill(6).isin(codigos_manuais)
             ].copy()
-        
-        elif ciclo_ativo:
-            prods_fixos = [str(p).zfill(6) for p in ciclo_ativo.get("produtos_lista", [])]
-            contados_set = set(data["contados"].keys())
-            prods_pendentes = [p for p in prods_fixos if p not in contados_set]
-            if prods_pendentes:
-                df_lista = df_score[
-                    df_score["Produto"].astype(str).str.zfill(6).isin(prods_pendentes)
-                ].copy()
-            else:
-                df_lista = df_score[
-                    df_score["Produto"].astype(str).str.zfill(6).isin(prods_fixos)
-                ].copy()
-                st.info("Todos os itens da lista já foram marcados como contados; revise o ciclo ou cancele se quiser reiniciar.")
-        
+
         else:
             armazens = sorted(df_score["Armazem"].unique().tolist()) if "Armazem" in df_score.columns else []
             arm_sel = st.multiselect("🏭 Armazéns", armazens, default=armazens)
@@ -818,13 +868,13 @@ def render(df_jlle, df_outras, formatar_br):
         
             df_lista = df_f.head(qtd).copy()
         
-        desc_col = next((c for c in df_lista.columns if "Descr" in str(c)), None)
-        cols_lista = ["Produto"]
-        if desc_col:
-            cols_lista.append(desc_col)
-        cols_lista.extend([c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Já Contado", "Score", "Motivo", "Origem"] if c in df_lista.columns])
-        st.dataframe(df_lista[cols_lista], use_container_width=True, hide_index=True)
         if not ciclo_ativo:
+            desc_col = next((c for c in df_lista.columns if "Descr" in str(c)), None)
+            cols_lista = ["Produto"]
+            if desc_col:
+                cols_lista.append(desc_col)
+            cols_lista.extend([c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Já Contado", "Score", "Motivo", "Origem"] if c in df_lista.columns])
+            st.dataframe(df_lista[cols_lista], use_container_width=True, hide_index=True)
             if st.button("🚀 Iniciar Ciclo", type="primary", use_container_width=True):
                 num_c = db_gerar_num_ciclo(engine, empresa, filial)
                 prods = df_lista["Produto"].astype(str).tolist()
@@ -835,16 +885,10 @@ def render(df_jlle, df_outras, formatar_br):
                     "produtos_lista": prods,
                     "qtd_lista": len(prods),
                 })
-                # Limpar cache e estado para garantir dados frescos do novo ciclo
                 _resetar_estado_ciclo(_cache_key)
                 st.session_state["ic_etapa_nav"] = 2
                 st.rerun()
 
-    # ── ETAPA 2 ──────────────────────────────────────────────────────────
-        else:
-            if st.button("âž¡ï¸ Continuar para Upload ERP", type="primary", use_container_width=True):
-                st.session_state["ic_etapa_nav"] = 2
-                st.rerun()
 
     elif etapa == 2:
         st.subheader("2. Upload do Relatório Protheus")
