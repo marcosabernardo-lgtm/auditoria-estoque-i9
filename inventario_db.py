@@ -390,6 +390,22 @@ def db_remover_erp_uploads(engine, empresa, filial, num_ciclo):
             conn.commit()
     except: pass
 
+def db_excluir_ciclo_historico(engine, empresa, filial, num_ciclo):
+    """Remove permanentemente um ciclo fechado e todos os seus dados."""
+    try:
+        with engine.connect() as conn:
+            for tabela in ("inventario_erp_upload", "inventario_justificativas",
+                           "inventario_nf_ajuste", "inventario_contados"):
+                conn.execute(text(f"DELETE FROM {tabela} WHERE empresa=:e AND filial=:f AND num_ciclo=:c"),
+                             {"e": empresa, "f": filial, "c": num_ciclo})
+            conn.execute(text("DELETE FROM inventario_ciclos_historico WHERE empresa=:e AND filial=:f AND num_ciclo=:c"),
+                         {"e": empresa, "f": filial, "c": num_ciclo})
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao excluir ciclo {num_ciclo}: {e}")
+        return False
+
 def db_cancelar_ciclo_ativo(engine, empresa, filial):
     try:
         with engine.connect() as conn:
