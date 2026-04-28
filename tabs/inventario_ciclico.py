@@ -26,7 +26,9 @@ from inventario_db import (
     db_salvar_justificativas, db_salvar_nf_ajuste,
     db_obter_nf_ajustes, db_obter_justificativas,
     db_gerar_num_ciclo,
-    db_testar_conexao
+    db_testar_conexao,
+    db_registrar_log,
+    db_obter_logs
 )
 
 PERIODO_KPMG_DIAS = 365
@@ -748,10 +750,15 @@ def render(df_jlle, df_outras, formatar_br):
         _contados_set = set(data.get("contados", {}).keys())
         _total        = len(_prods_lista)
         _contados_n   = len([p for p in _prods_lista if p in _contados_set])
-        _pendentes    = _total - _contados_n
-        _pct          = (_contados_n / _total * 100) if _total > 0 else 0.0
+        _sub_total    = "produtos na lista do ciclo"
+    else:
+        _total      = len(df_jlle) if df_jlle is not None and not df_jlle.empty else 0
+        _contados_n = len(data.get("contados", {}))
+        _sub_total  = "SKUs no catálogo"
+    _pendentes = _total - _contados_n
+    _pct       = (_contados_n / _total * 100) if _total > 0 else 0.0
 
-        st.markdown(f"""
+    st.markdown(f"""
         <style>
         .ic-cards{{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:1.5rem;}}
         .ic-card{{background:#004550;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:1rem 1.25rem;}}
@@ -766,7 +773,7 @@ def render(df_jlle, df_outras, formatar_br):
         <div class="ic-cards">
           <div class="ic-card">
             <div class="ic-card-top">
-              <p class="ic-card-label">Itens a serem contados</p>
+              <p class="ic-card-label">SKUs a serem contados</p>
               <div class="ic-card-icon" style="background:rgba(55,138,221,0.2);">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <rect x="2" y="2" width="5" height="5" rx="1" fill="#378ADD"/>
@@ -777,11 +784,11 @@ def render(df_jlle, df_outras, formatar_br):
               </div>
             </div>
             <p class="ic-card-value">{_total}</p>
-            <p class="ic-card-sub">produtos na lista do ciclo</p>
+            <p class="ic-card-sub">{_sub_total}</p>
           </div>
           <div class="ic-card">
             <div class="ic-card-top">
-              <p class="ic-card-label">Itens contados</p>
+              <p class="ic-card-label">SKUs contados</p>
               <div class="ic-card-icon" style="background:rgba(29,158,117,0.2);">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <circle cx="8" cy="8" r="6" stroke="#1D9E75" stroke-width="1.5"/>
@@ -790,11 +797,11 @@ def render(df_jlle, df_outras, formatar_br):
               </div>
             </div>
             <p class="ic-card-value">{_contados_n}</p>
-            <p class="ic-card-sub">produtos já conferidos</p>
+            <p class="ic-card-sub">SKUs conferidos</p>
           </div>
           <div class="ic-card">
             <div class="ic-card-top">
-              <p class="ic-card-label">% Realizada</p>
+              <p class="ic-card-label">SKUs pendentes</p>
               <div class="ic-card-icon" style="background:rgba(236,110,33,0.2);">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <circle cx="8" cy="8" r="6" stroke="#EC6E21" stroke-width="1.5"/>
@@ -802,9 +809,9 @@ def render(df_jlle, df_outras, formatar_br):
                 </svg>
               </div>
             </div>
-            <p class="ic-card-value">{_pct:.0f}%</p>
+            <p class="ic-card-value">{_pendentes}</p>
             <div class="ic-progress"><div class="ic-progress-fill" style="width:{_pct:.1f}%"></div></div>
-            <p class="ic-card-sub">{_pendentes} {'item' if _pendentes == 1 else 'itens'} pendente{'s' if _pendentes != 1 else ''}</p>
+            <p class="ic-card-sub">{_pct:.0f}% realizado</p>
           </div>
         </div>
         """, unsafe_allow_html=True)
@@ -952,6 +959,17 @@ def render(df_jlle, df_outras, formatar_br):
                 cols_lista.append(desc_col)
             cols_lista.extend([c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Já Contado", "Score", "Motivo", "Origem"] if c in df_lista.columns])
             st.dataframe(df_lista[cols_lista], use_container_width=True, hide_index=True)
+
+            _buf_et1 = io.BytesIO()
+            with pd.ExcelWriter(_buf_et1, engine="xlsxwriter") as _w:
+                df_lista[cols_lista].to_excel(_w, index=False, sheet_name="Lista")
+            st.download_button(
+                "📥 Exportar Excel",
+                data=_buf_et1.getvalue(),
+                file_name=f"lista_contagem_{date.today().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
             if st.button("🚀 Iniciar Ciclo", type="primary", use_container_width=True):
                 num_c = db_gerar_num_ciclo(engine, empresa, filial)
                 prods = df_lista["Produto"].astype(str).tolist()

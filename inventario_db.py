@@ -103,6 +103,24 @@ def _garantir_tabela_historico_postgres(engine):
     except Exception as e:
         logger.error(f"Erro ao garantir tabela histórico: {e}")
 
+def garantir_tabela_log(engine):
+    """Cria inventario_log se não existir (SQLite e PostgreSQL)."""
+    now_fn = "CURRENT_TIMESTAMP" if "sqlite" in str(engine.url) else "NOW()"
+    id_col = "id INTEGER PRIMARY KEY AUTOINCREMENT" if "sqlite" in str(engine.url) else "id SERIAL PRIMARY KEY"
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS inventario_log (
+                    {id_col},
+                    empresa TEXT, filial TEXT, operador TEXT,
+                    acao TEXT, detalhe TEXT, status TEXT,
+                    criado_em TIMESTAMP DEFAULT {now_fn}
+                )
+            """))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Erro ao garantir tabela log: {e}")
+
 def garantir_tabela_ajustes(engine):
     """Cria inventario_ajustes se não existir (SQLite e PostgreSQL)."""
     if "sqlite" in str(engine.url):
@@ -500,12 +518,14 @@ def db_testar_conexao(engine):
 def db_registrar_log(engine, empresa, filial, operador, acao, detalhe="", status="ok"):
     """Registra uma operação no log. Falha silenciosa para não interromper o fluxo."""
     if engine is None: return
+    garantir_tabela_log(engine)
+    now_fn = get_now_fn(engine)
     try:
         with engine.connect() as conn:
-            conn.execute(text("""
+            conn.execute(text(f"""
                 INSERT INTO inventario_log
                     (empresa, filial, operador, acao, detalhe, status, criado_em)
-                VALUES (:e,:f,:op,:acao,:det,:st,NOW())
+                VALUES (:e,:f,:op,:acao,:det,:st,{now_fn})
             """), {"e":empresa,"f":filial,"op":operador,
                    "acao":acao,"det":str(detalhe)[:500],"st":status})
             conn.commit()
