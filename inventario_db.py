@@ -253,7 +253,10 @@ def db_salvar_ciclo_ativo(engine, empresa, filial, ciclo):
             conn.execute(text(f"INSERT INTO inventario_ciclo_ativo (empresa, filial, num_ciclo, data_geracao, responsavel, label, qtd_lista, produtos_lista, uploads_json, status, atualizado_em) VALUES (:e, :f, :num_ciclo, :data_geracao, :responsavel, :label, :qtd_lista, :produtos_lista, :uploads_json, :status, {now_fn})"),
                 {"e":empresa, "f":filial, "num_ciclo": num_ciclo, "data_geracao": ciclo.get("data_geracao",""), "responsavel": ciclo.get("responsavel", ""), "label": f"{empresa}-{filial}", "qtd_lista": ciclo.get("qtd_lista", 0), "produtos_lista": json.dumps(ciclo.get("produtos_lista",[])), "uploads_json": json.dumps(ciclo.get("uploads",[])), "status": ciclo.get("status","Em andamento")})
             conn.commit()
-    except Exception as e: logger.error(e)
+    except Exception as e:
+        logger.error(e)
+        return str(e)
+    return None
 
 def db_fechar_ciclo_ativo(engine, empresa, filial):
     """

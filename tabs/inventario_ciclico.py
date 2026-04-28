@@ -973,13 +973,16 @@ def render(df_jlle, df_outras, formatar_br):
             if st.button("🚀 Iniciar Ciclo", type="primary", use_container_width=True):
                 num_c = db_gerar_num_ciclo(engine, empresa, filial)
                 prods = df_lista["Produto"].astype(str).tolist()
-                db_salvar_ciclo_ativo(engine, empresa, filial, {
+                _err = db_salvar_ciclo_ativo(engine, empresa, filial, {
                     "num_ciclo": num_c,
                     "data_geracao": date.today().strftime("%d/%m/%Y"),
                     "responsavel": st.session_state.get("_app_operador", ""),
                     "produtos_lista": prods,
                     "qtd_lista": len(prods),
                 })
+                if _err:
+                    st.error(f"Erro ao salvar ciclo no banco: {_err}")
+                    st.stop()
                 db_registrar_log(engine, empresa, filial, operador,
                                  "Ciclo iniciado", f"num_ciclo={num_c}, {len(prods)} SKUs")
                 _resetar_estado_ciclo(_cache_key)
