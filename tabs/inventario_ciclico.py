@@ -25,7 +25,8 @@ from inventario_db import (
     db_atualizar_lista_ciclo,
     db_salvar_justificativas, db_salvar_nf_ajuste,
     db_obter_nf_ajustes, db_obter_justificativas,
-    db_gerar_num_ciclo
+    db_gerar_num_ciclo,
+    db_testar_conexao
 )
 
 PERIODO_KPMG_DIAS = 365
