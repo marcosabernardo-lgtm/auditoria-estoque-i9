@@ -742,6 +742,73 @@ def render(df_jlle, df_outras, formatar_br):
     
     etapa = st.session_state["ic_etapa_nav"]
 
+    # ── CARDS DE PROGRESSO DO CICLO ───────────────────────────────────────────
+    if ciclo_ativo:
+        _prods_lista  = [str(p).zfill(6) for p in ciclo_ativo.get("produtos_lista", [])]
+        _contados_set = set(data.get("contados", {}).keys())
+        _total        = len(_prods_lista)
+        _contados_n   = len([p for p in _prods_lista if p in _contados_set])
+        _pendentes    = _total - _contados_n
+        _pct          = (_contados_n / _total * 100) if _total > 0 else 0.0
+
+        st.markdown(f"""
+        <style>
+        .ic-cards{{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:1.5rem;}}
+        .ic-card{{background:#004550;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:1rem 1.25rem;}}
+        .ic-card-top{{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px;}}
+        .ic-card-label{{font-size:12px;color:rgba(255,255,255,0.6);margin:0;}}
+        .ic-card-icon{{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}}
+        .ic-card-value{{font-size:28px;font-weight:700;color:#ffffff;margin:0;line-height:1.1;}}
+        .ic-card-sub{{font-size:12px;color:rgba(255,255,255,0.5);margin:4px 0 0;}}
+        .ic-progress{{width:100%;height:6px;background:rgba(255,255,255,0.15);border-radius:99px;margin-top:8px;overflow:hidden;}}
+        .ic-progress-fill{{height:100%;border-radius:99px;background:#EC6E21;}}
+        </style>
+        <div class="ic-cards">
+          <div class="ic-card">
+            <div class="ic-card-top">
+              <p class="ic-card-label">Itens a serem contados</p>
+              <div class="ic-card-icon" style="background:rgba(55,138,221,0.2);">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <rect x="2" y="2" width="5" height="5" rx="1" fill="#378ADD"/>
+                  <rect x="9" y="2" width="5" height="5" rx="1" fill="#378ADD"/>
+                  <rect x="2" y="9" width="5" height="5" rx="1" fill="#378ADD"/>
+                  <rect x="9" y="9" width="5" height="5" rx="1" fill="#378ADD" opacity="0.4"/>
+                </svg>
+              </div>
+            </div>
+            <p class="ic-card-value">{_total}</p>
+            <p class="ic-card-sub">produtos na lista do ciclo</p>
+          </div>
+          <div class="ic-card">
+            <div class="ic-card-top">
+              <p class="ic-card-label">Itens contados</p>
+              <div class="ic-card-icon" style="background:rgba(29,158,117,0.2);">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="6" stroke="#1D9E75" stroke-width="1.5"/>
+                  <path d="M5 8l2 2 4-4" stroke="#1D9E75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+            <p class="ic-card-value">{_contados_n}</p>
+            <p class="ic-card-sub">produtos já conferidos</p>
+          </div>
+          <div class="ic-card">
+            <div class="ic-card-top">
+              <p class="ic-card-label">% Realizada</p>
+              <div class="ic-card-icon" style="background:rgba(236,110,33,0.2);">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="6" stroke="#EC6E21" stroke-width="1.5"/>
+                  <path d="M8 4v4l3 1.5" stroke="#EC6E21" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+              </div>
+            </div>
+            <p class="ic-card-value">{_pct:.0f}%</p>
+            <div class="ic-progress"><div class="ic-progress-fill" style="width:{_pct:.1f}%"></div></div>
+            <p class="ic-card-sub">{_pendentes} {'item' if _pendentes == 1 else 'itens'} pendente{'s' if _pendentes != 1 else ''}</p>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
     st.markdown("### Fluxo de Inventário")
     cols = st.columns(6)
     steps = ["Gerar Lista", "Upload ERP", "Conferência", "NF Ajuste", "Fechar", "Histórico"]
