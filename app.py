@@ -34,7 +34,7 @@ st.markdown(
 )
 
 # --- CONFIGURAÇÃO DE AMBIENTE ---
-MODO_DEV = True  # True = Local (Teste) | False = Supabase (Produção)
+MODO_DEV = False  # True = Local (Teste) | False = Supabase (Produção)
 
 # --- FUNÇÕES DE UTILIDADE ---
 def para_excel(df):
