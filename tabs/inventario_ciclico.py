@@ -238,15 +238,23 @@ def calcular_score_turbo(df, contados_tuple):
     df["Curva ABC"] = np.where(df["pct_acum"]<=0.80,"A", np.where(df["pct_acum"]<=0.95,"B","C"))
     hoje = date.today()
     df["Dias s/ Contagem"] = df["Produto"].astype(str).apply(lambda p: (hoje - date.fromisoformat(contados[p])).days if p in contados else PERIODO_KPMG_DIAS)
-    df["Score"] = (df["Dias s/ Contagem"] / PERIODO_KPMG_DIAS * 10).round(2)
     df["Já Contado"] = df["Produto"].astype(str).apply(lambda p: f"✅ {contados[p]}" if p in contados else "⬜ Não")
+
+    def prioridade(r):
+        if r.get("Status", "") == "Divergente":
+            return 1  # divergentes primeiro
+        if not r["Já Contado"].startswith("✅"):
+            return 2  # nunca contados, do maior para menor valor
+        return 3      # já contados, do maior para menor valor
+
+    df["Prioridade"] = df.apply(prioridade, axis=1)
 
     def motivo(r):
         rs = []
-        if r["Curva ABC"] == "A":
-            rs.append("Curva A")
         if r.get("Status", "") == "Divergente":
             rs.append("Divergência")
+        if r["Curva ABC"] == "A":
+            rs.append("Curva A")
         if r["Dias s/ Contagem"] >= PERIODO_KPMG_DIAS:
             rs.append("Nunca contado")
         elif r["Dias s/ Contagem"] > 180:
@@ -256,7 +264,10 @@ def calcular_score_turbo(df, contados_tuple):
         return " · ".join(rs) if rs else "Em estoque"
 
     df["Motivo"] = df.apply(motivo, axis=1)
-    df = df.sort_values("Score", ascending=False).reset_index(drop=True)
+    df = df.sort_values(
+        ["Prioridade", "Vl Total ERP", "Dias s/ Contagem"],
+        ascending=[True, False, False]
+    ).reset_index(drop=True)
     return df
 
 # ── FUNÇÕES DO RELATÓRIO FINAL (PADRÃO MAIN) ─────────────────────────────────
@@ -881,7 +892,7 @@ def render(df_jlle, df_outras, formatar_br):
             desc_col = next((c for c in df_lista_full.columns if "Descr" in str(c)), None)
             cols_ed = ["Incluir", "Produto"]
             if desc_col: cols_ed.append(desc_col)
-            cols_ed += [c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Contado", "Score"] if c in df_lista_full.columns]
+            cols_ed += [c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Contado", "Prioridade"] if c in df_lista_full.columns]
 
             st.caption(f"📋 Lista atual: **{len(prods_fixos)}** produto(s) — desmarque os que deseja remover")
             df_editado = st.data_editor(
@@ -963,8 +974,14 @@ def render(df_jlle, df_outras, formatar_br):
             cols_lista = ["Produto"]
             if desc_col:
                 cols_lista.append(desc_col)
-            cols_lista.extend([c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Já Contado", "Score", "Motivo", "Origem"] if c in df_lista.columns])
-            st.dataframe(df_lista[cols_lista], use_container_width=True, hide_index=True)
+            cols_lista.extend([c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Já Contado", "Prioridade", "Motivo", "Origem"] if c in df_lista.columns])
+            df_lista_disp = df_lista[cols_lista].copy()
+            if "Vl Total ERP" in df_lista_disp.columns:
+                df_lista_disp["Vl Total ERP"] = df_lista_disp["Vl Total ERP"].apply(
+                    lambda v: f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    if pd.notna(v) else ""
+                )
+            st.dataframe(df_lista_disp, use_container_width=True, hide_index=True)
 
             _buf_et1 = io.BytesIO()
             with pd.ExcelWriter(_buf_et1, engine="xlsxwriter") as _w:
