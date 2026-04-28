@@ -720,17 +720,26 @@ def render(df_jlle, df_outras, formatar_br):
         st.sidebar.success("✅ Banco conectado", icon="🔒")
 
     _cache_key = f"st_data_{empresa}_{filial}"
-    if _cache_key not in st.session_state or st.session_state.get("ic_force_reload"):
+    _in_draft = "ic_draft" in st.session_state
+    if not _in_draft and (_cache_key not in st.session_state or st.session_state.get("ic_force_reload")):
         st.session_state[_cache_key] = db_carregar_tudo(engine, empresa, filial)
         st.session_state["ic_force_reload"] = False
-    
-    data = st.session_state[_cache_key]
-    ciclo_ativo = data.get("ciclo_ativo")
-    erp_data = data.get("erp_uploads", [])
+
+    data = st.session_state.get(_cache_key, {})
+
+    # Modo draft: usa session_state em vez do banco durante o ciclo
+    if _in_draft:
+        _d = st.session_state["ic_draft"]
+        data = {**data, "ciclo_ativo": _d["ciclo"], "erp_uploads": _d["erp_uploads"],
+                "contados": _d["contados"], "justs": _d["justs"], "nf_ajustes": _d["nf_ajustes"]}
+
+    ciclo_ativo  = data.get("ciclo_ativo")
+    erp_data     = data.get("erp_uploads", [])
     justs_salvas = data.get("justs", {})
-    
-    num_c = ciclo_ativo['num_ciclo'] if ciclo_ativo else ""
-    nf_ajustes = db_obter_nf_ajustes(engine, empresa, filial, num_c) if num_c else {}
+
+    num_c      = ciclo_ativo['num_ciclo'] if ciclo_ativo else ""
+    nf_ajustes = st.session_state["ic_draft"]["nf_ajustes"] if _in_draft else (
+                 db_obter_nf_ajustes(engine, empresa, filial, num_c) if num_c else {})
 
     if "ic_etapa_nav" not in st.session_state:
         if not ciclo_ativo:
@@ -905,13 +914,10 @@ def render(df_jlle, df_outras, formatar_br):
                     if not nova_lista:
                         st.error("A lista não pode ficar vazia.")
                     else:
-                        ok = db_atualizar_lista_ciclo(engine, empresa, filial, nova_lista)
-                        if ok:
-                            st.session_state["ic_force_reload"] = True
-                            st.success(f"✅ Lista atualizada com {len(nova_lista)} produto(s).")
-                            st.rerun()
-                        else:
-                            st.error("Erro ao salvar. Tente novamente.")
+                        st.session_state["ic_draft"]["ciclo"]["produtos_lista"] = nova_lista
+                        st.session_state["ic_draft"]["ciclo"]["qtd_lista"] = len(nova_lista)
+                        st.success(f"✅ Lista atualizada com {len(nova_lista)} produto(s).")
+                        st.rerun()
             with col_excel:
                 _buf = io.BytesIO()
                 with pd.ExcelWriter(_buf, engine="xlsxwriter") as _w:
@@ -973,19 +979,20 @@ def render(df_jlle, df_outras, formatar_br):
             if st.button("🚀 Iniciar Ciclo", type="primary", use_container_width=True):
                 num_c = db_gerar_num_ciclo(engine, empresa, filial)
                 prods = df_lista["Produto"].astype(str).tolist()
-                _err = db_salvar_ciclo_ativo(engine, empresa, filial, {
+                _ciclo_draft = {
                     "num_ciclo": num_c,
                     "data_geracao": date.today().strftime("%d/%m/%Y"),
                     "responsavel": st.session_state.get("_app_operador", ""),
                     "produtos_lista": prods,
                     "qtd_lista": len(prods),
-                })
-                if _err:
-                    st.error(f"Erro ao salvar ciclo no banco: {_err}")
-                    st.stop()
-                db_registrar_log(engine, empresa, filial, operador,
-                                 "Ciclo iniciado", f"num_ciclo={num_c}, {len(prods)} SKUs")
+                    "uploads": [],
+                    "status": "Em andamento",
+                }
                 _resetar_estado_ciclo(_cache_key)
+                st.session_state["ic_draft"] = {
+                    "ciclo": _ciclo_draft, "erp_uploads": [],
+                    "contados": {}, "justs": {}, "nf_ajustes": [],
+                }
                 st.session_state["ic_etapa_nav"] = 2
                 st.rerun()
 
@@ -996,9 +1003,11 @@ def render(df_jlle, df_outras, formatar_br):
             st.success(f"✅ Upload salvo (Doc: {erp_data[0].get('documento')})")
             c1, c2 = st.columns(2)
             if c1.button("🗑️ Remover", use_container_width=True):
-                db_remover_erp_uploads(engine, empresa, filial, ciclo_ativo['num_ciclo'])
+                _d = st.session_state["ic_draft"]
+                _d["erp_uploads"] = []
+                _d["contados"] = {}
+                st.session_state["ic_draft"] = _d
                 st.session_state["ic_aceitar_nao_contados"] = False
-                st.session_state["ic_force_reload"] = True
                 st.rerun()
             if c2.button("Conferência ➡️", type="primary", use_container_width=True):
                 st.session_state["ic_etapa_nav"] = 3
@@ -1035,15 +1044,13 @@ def render(df_jlle, df_outras, formatar_br):
                 if "Divergencia Valor" in df_up.columns and (df_up["Divergencia Valor"] > 0).any() and (df_up["Divergencia Qtd"] < 0).any():
                     df_up["Divergencia Valor"] = -df_up["Divergencia Valor"].abs()
                 st.dataframe(df_up[["Codigo", "Descricao", "Qtd WMS", "Qtd ERP", "Divergencia Qtd"]], use_container_width=True)
-                if st.button("💾 Confirmar e Salvar Dados", type="primary"):
+                if st.button("💾 Confirmar Dados", type="primary"):
                     doc_num = str(df_up["Documento"].iloc[0]) if "Documento" in df_up.columns else "S/N"
-                    db_salvar_erp_upload(engine, empresa, filial, ciclo_ativo['num_ciclo'], doc_num, date.today().isoformat(), df_up.to_dict("records"))
-                    db_marcar_contados(engine, empresa, filial, df_up["Codigo"].astype(str).tolist(), num_ciclo=ciclo_ativo['num_ciclo'])
-                    db_registrar_log(engine, empresa, filial, operador,
-                                     "Upload ERP", f"doc={doc_num}, {len(df_up)} itens, ciclo={ciclo_ativo['num_ciclo']}")
-                    st.toast("✅ Dados salvos no banco!", icon="💾")
+                    _d = st.session_state["ic_draft"]
+                    _d["erp_uploads"] = [{"documento": doc_num, "data_upload": date.today().isoformat(), "dados": df_up.to_dict("records")}]
+                    _d["contados"].update({str(c).zfill(6): date.today().isoformat() for c in df_up["Codigo"].astype(str).tolist()})
+                    st.session_state["ic_draft"] = _d
                     st.session_state["ic_aceitar_nao_contados"] = False
-                    st.session_state["ic_force_reload"] = True
                     st.session_state["ic_etapa_nav"] = 3
                     st.rerun()
 
@@ -1130,15 +1137,8 @@ def render(df_jlle, df_outras, formatar_br):
             )
             if st.button("💾 Salvar Justificativas", type="primary", use_container_width=True):
                 novas_justs = dict(zip(df_edit["Codigo"], df_edit["Justificativa"]))
-                db_salvar_justificativas(engine, empresa, filial, ciclo_ativo['num_ciclo'], novas_justs)
-                db_registrar_log(engine, empresa, filial, operador,
-                                 "Justificativas salvas", f"{len(novas_justs)} itens, ciclo={ciclo_ativo['num_ciclo']}")
-                st.toast("✅ Justificativas salvas no banco!", icon="💾")
-                st.session_state["ic_force_reload"] = True
-                if "Ajuste de inventário" in novas_justs.values():
-                    st.session_state["ic_etapa_nav"] = 4
-                else:
-                    st.session_state["ic_etapa_nav"] = 5
+                st.session_state["ic_draft"]["justs"] = novas_justs
+                st.session_state["ic_etapa_nav"] = 4 if "Ajuste de inventário" in novas_justs.values() else 5
                 st.rerun()
 
     # ── ETAPA 4 ──────────────────────────────────────────────────────────
@@ -1164,11 +1164,10 @@ def render(df_jlle, df_outras, formatar_br):
                             data_iso = datetime.strptime(nf_dados["data"], "%d/%m/%Y").date().isoformat()
                         except:
                             data_iso = date.today().isoformat()
-                        db_salvar_nf_ajuste(engine, empresa, filial, ciclo_ativo['num_ciclo'], nf_dados["num_nf"], data_iso, nf_dados["natureza"], nf_dados["itens"])
-                        db_registrar_log(engine, empresa, filial, operador,
-                                         "NF ajuste vinculada", f"NF={nf_dados['num_nf']}, {len(nf_dados['itens'])} itens, ciclo={ciclo_ativo['num_ciclo']}")
-                        st.toast(f"✅ NF {nf_dados['num_nf']} salva no banco!", icon="💾")
-                        st.session_state["ic_force_reload"] = True
+                        st.session_state["ic_draft"]["nf_ajustes"] = [{
+                            "num_nf": nf_dados["num_nf"], "data_nf": data_iso,
+                            "natureza": nf_dados["natureza"], "itens": nf_dados["itens"]
+                        }]
                         st.session_state["ic_etapa_nav"] = 5
                         st.rerun()
 
@@ -1204,26 +1203,51 @@ def render(df_jlle, df_outras, formatar_br):
                 st.session_state["ic_force_reload"] = True
                 st.rerun()
             if col_c.button("🚫 Cancelar ciclo", type="secondary", use_container_width=True):
-                db_cancelar_ciclo_ativo(engine, empresa, filial)
+                st.session_state.pop("ic_draft", None)
                 _resetar_estado_ciclo(_cache_key)
                 st.rerun()
         else:
             if pending_codes:
                 st.info("Itens não contados foram aceitos/justificados para este ciclo.")
             if st.button("🏁 ENCERRAR", type="primary", use_container_width=True):
-                ok = db_fechar_ciclo_ativo(engine, empresa, filial)
-                if not ok:
-                    st.error("Erro ao salvar o histórico do ciclo. Verifique os logs do servidor.")
-                else:
-                    db_registrar_log(engine, empresa, filial, operador,
-                                     "Ciclo encerrado", f"ciclo={num_c}")
-                    st.toast("✅ Ciclo encerrado e salvo no banco!", icon="🏁")
-                    if _cache_key in st.session_state:
-                        del st.session_state[_cache_key]
-                    st.session_state.pop("ic_aceitar_nao_contados", None)
-                    st.session_state["ic_force_reload"] = True
-                    st.session_state["ic_etapa_nav"] = 1
-                    st.rerun()
+                with st.spinner("Salvando ciclo no banco..."):
+                    _d     = st.session_state["ic_draft"]
+                    _ciclo = _d["ciclo"]
+                    _nc    = _ciclo["num_ciclo"]
+
+                    _err = db_salvar_ciclo_ativo(engine, empresa, filial, _ciclo)
+                    if _err:
+                        st.error(f"Erro ao salvar ciclo: {_err}")
+                        st.stop()
+
+                    for _up in _d["erp_uploads"]:
+                        db_salvar_erp_upload(engine, empresa, filial, _nc,
+                                             _up["documento"], _up["data_upload"], _up["dados"])
+                        db_marcar_contados(engine, empresa, filial,
+                                           [i["Codigo"] for i in _up["dados"]], num_ciclo=_nc)
+
+                    if _d["justs"]:
+                        db_salvar_justificativas(engine, empresa, filial, _nc, _d["justs"])
+
+                    for _nf in _d["nf_ajustes"]:
+                        db_salvar_nf_ajuste(engine, empresa, filial, _nc,
+                                            _nf["num_nf"], _nf["data_nf"], _nf["natureza"], _nf["itens"])
+
+                    ok = db_fechar_ciclo_ativo(engine, empresa, filial)
+                    if not ok:
+                        st.error("Erro ao fechar o ciclo. Verifique os logs do servidor.")
+                        st.stop()
+
+                    db_registrar_log(engine, empresa, filial, operador, "Ciclo encerrado", f"ciclo={_nc}")
+
+                st.toast("✅ Ciclo encerrado e salvo no banco!", icon="🏁")
+                st.session_state.pop("ic_draft", None)
+                st.session_state.pop("ic_aceitar_nao_contados", None)
+                if _cache_key in st.session_state:
+                    del st.session_state[_cache_key]
+                st.session_state["ic_force_reload"] = True
+                st.session_state["ic_etapa_nav"] = 1
+                st.rerun()
 
     # ── ETAPA 6 — HISTÓRICO KPMG ─────────────────────────────────────────
     elif etapa == 6:
