@@ -480,3 +480,52 @@ def db_obter_justificativas(engine, empresa=None, filial=None, num_ciclo=None, *
         return {r[0]: r[1] for r in rows}
     except:
         return {}
+
+# ── Verificação de conexão ────────────────────────────────────────────────────
+
+def db_testar_conexao(engine):
+    """Testa se a conexão com o banco está ativa. Retorna (ok, msg)."""
+    if engine is None:
+        return False, "Engine não inicializado"
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True, "OK"
+    except Exception as ex:
+        return False, str(ex)
+
+
+# ── Log de operações ──────────────────────────────────────────────────────────
+
+def db_registrar_log(engine, empresa, filial, operador, acao, detalhe="", status="ok"):
+    """Registra uma operação no log. Falha silenciosa para não interromper o fluxo."""
+    if engine is None: return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO inventario_log
+                    (empresa, filial, operador, acao, detalhe, status, criado_em)
+                VALUES (:e,:f,:op,:acao,:det,:st,NOW())
+            """), {"e":empresa,"f":filial,"op":operador,
+                   "acao":acao,"det":str(detalhe)[:500],"st":status})
+            conn.commit()
+    except Exception as ex:
+        logger.warning("db_registrar_log: %s", ex)
+
+
+def db_obter_logs(engine, empresa, filial, limite=50):
+    """Retorna os últimos logs de operações."""
+    if engine is None: return []
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT criado_em, operador, acao, detalhe, status
+                FROM inventario_log
+                WHERE empresa=:e AND filial=:f
+                ORDER BY criado_em DESC LIMIT :lim
+            """), {"e":empresa,"f":filial,"lim":limite}).fetchall()
+        return [{"criado_em":str(r[0]),"operador":r[1],"acao":r[2],
+                 "detalhe":r[3],"status":r[4]} for r in rows]
+    except Exception as ex:
+        logger.warning("db_obter_logs: %s", ex)
+        return []
