@@ -33,6 +33,29 @@ from inventario_db import (
 
 PERIODO_KPMG_DIAS = 365
 
+def _estilizar_lista(df):
+    fmt_cols = {}
+    for col in df.columns:
+        if col in ("Vl Total ERP", "Vl Unit"):
+            fmt_cols[col] = "R$ {:,.2f}"
+        elif any(x in col for x in ["Saldo", "Qtd"]) and "Vl" not in col:
+            fmt_cols[col] = "{:,.2f}"
+    styled = df.style.apply(
+        lambda r: ["background-color: #005562; color: #ffffff; font-size: 0.84rem;"] * len(r), axis=1
+    )
+    styled = styled.set_table_styles([
+        {"selector": "thead th", "props": [
+            ("background-color", "#004550"), ("color", "#ffffff"),
+            ("border-bottom", "2px solid #EC6E21"), ("text-transform", "uppercase"),
+        ]},
+        {"selector": "td", "props": [
+            ("padding", "8px 12px"), ("border-bottom", "1px solid rgba(255,255,255,0.05)"),
+        ]},
+    ])
+    if fmt_cols:
+        styled = styled.format(fmt_cols, na_rep="-")
+    return styled
+
 def _resetar_estado_ciclo(cache_key: str):
     """Limpa o estado de sessão do inventário cíclico antes de iniciar um novo ciclo."""
     for chave in list(st.session_state.keys()):
@@ -976,12 +999,7 @@ def render(df_jlle, df_outras, formatar_br):
                 cols_lista.append(desc_col)
             cols_lista.extend([c for c in ["Saldo ERP (Total)", "Vl Total ERP", "Curva ABC", "Já Contado", "Prioridade", "Motivo", "Origem"] if c in df_lista.columns])
             df_lista_disp = df_lista[cols_lista].copy()
-            if "Vl Total ERP" in df_lista_disp.columns:
-                df_lista_disp["Vl Total ERP"] = df_lista_disp["Vl Total ERP"].apply(
-                    lambda v: f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                    if pd.notna(v) else ""
-                )
-            st.dataframe(df_lista_disp, use_container_width=True, hide_index=True)
+            st.dataframe(_estilizar_lista(df_lista_disp), use_container_width=True, hide_index=True)
 
             _buf_et1 = io.BytesIO()
             with pd.ExcelWriter(_buf_et1, engine="xlsxwriter") as _w:
