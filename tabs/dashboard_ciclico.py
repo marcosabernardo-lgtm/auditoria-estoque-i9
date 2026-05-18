@@ -361,8 +361,8 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
         return
 
     col_y = tipo
-    y_min = max(90.0, float(grp[col_y].min()) - 2)
-    y_max = min(101.0, float(grp[col_y].max()) + 1)
+    y_min = 93.0
+    y_max = 101.0
 
     st.markdown(
         f'<div style="color:#ffffff; font-weight:700; font-size:1rem; margin:10px 0 4px;">'
