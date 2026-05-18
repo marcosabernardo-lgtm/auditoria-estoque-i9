@@ -1,9 +1,9 @@
 import io
 import json
 
-import altair as alt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
 
@@ -335,15 +335,14 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
         df_analise = df_analise[df_analise["Filial"] == fil_sel]
 
     df_analise = df_analise.dropna(subset=["Data Inventario"])
-    # Agrupa por "YYYY-MM" (string) para garantir um ponto por mês
     df_analise["Mes_key"] = df_analise["Data Inventario"].dt.strftime("%Y-%m")
 
     grp = (
         df_analise.groupby("Mes_key", sort=True)
         .agg(
-            total    =("Produto", "count"),
-            div_qtd  =("Qtd Divergente",   lambda s: int((s != 0).sum())),
-            div_val  =("Valor Divergente",  lambda s: int((s != 0).sum())),
+            total   =("Produto", "count"),
+            div_qtd =("Qtd Divergente",  lambda s: int((s != 0).sum())),
+            div_val =("Valor Divergente", lambda s: int((s != 0).sum())),
         )
         .reset_index()
     )
@@ -353,98 +352,68 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
     grp["Acuracidade Valor"] = (
         (grp["total"] - grp["div_val"]) / grp["total"] * 100
     ).round(2)
-    # Converte para datetime só para o eixo X do Altair
-    grp["Mes"] = pd.to_datetime(grp["Mes_key"] + "-01")
 
     if grp.empty:
         st.info("Sem dados suficientes para o gráfico.")
         return
 
-    col_y = tipo
+    col_y  = tipo
+    x_vals = grp["Mes_key"].tolist()
+    y_vals = grp[col_y].tolist()
 
-    y_scale = alt.Scale(domain=[93.0, 101.0])
-    y_axis  = alt.Axis(
-        values=[93, 94, 95, 96, 97, 98, 99, 100, 101],
-        labelExpr="datum.value + '%'",
-        labelColor="#a0c4cc",
-        gridColor="#1a6672",
-        domainColor="#007687",
-        tickColor="#007687",
-        title="",
-    )
-    x_axis = alt.Axis(
-        format="%Y-%m",
-        tickCount="month",
-        labelColor="#a0c4cc",
-        gridColor="#1a6672",
-        domainColor="#007687",
-        tickColor="#007687",
-        title="",
-    )
+    fig = go.Figure()
 
-    area = (
-        alt.Chart(grp)
-        .mark_area(color="#2a7a5a", opacity=0.45)
-        .encode(
-            x=alt.X("Mes:T", axis=x_axis),
-            y=alt.Y(f"{col_y}:Q", scale=y_scale, axis=y_axis),
-        )
-    )
-    line = (
-        alt.Chart(grp)
-        .mark_line(color="#EC6E21", strokeWidth=2.5)
-        .encode(
-            x=alt.X("Mes:T"),
-            y=alt.Y(f"{col_y}:Q", scale=y_scale),
-            tooltip=[
-                alt.Tooltip("Mes_key:N", title="Mês"),
-                alt.Tooltip(f"{col_y}:Q", title="Acuracidade", format=".2f"),
-            ],
-        )
-    )
-    points = (
-        alt.Chart(grp)
-        .mark_point(color="#EC6E21", size=70, filled=True)
-        .encode(
-            x=alt.X("Mes:T"),
-            y=alt.Y(f"{col_y}:Q", scale=y_scale),
-        )
-    )
-    meta_df   = pd.DataFrame({"y": [95.0]})
-    meta_line = (
-        alt.Chart(meta_df)
-        .mark_rule(strokeDash=[6, 4], color="#EC6E21", opacity=0.7, strokeWidth=1.5)
-        .encode(y=alt.Y("y:Q", scale=y_scale))
-    )
-    meta_text = (
-        alt.Chart(meta_df)
-        .mark_text(align="left", color="#EC6E21", opacity=0.9,
-                   fontSize=10, dx=4, dy=-4)
-        .encode(
-            y=alt.Y("y:Q", scale=y_scale),
-            x=alt.value(0),
-            text=alt.value("Meta 95%"),
-        )
+    # Área preenchida
+    fig.add_trace(go.Scatter(
+        x=x_vals, y=y_vals,
+        mode="lines+markers",
+        fill="tozeroy",
+        fillcolor="rgba(42,122,90,0.45)",
+        line=dict(color="#EC6E21", width=2.5),
+        marker=dict(color="#EC6E21", size=8),
+        name=col_y,
+        hovertemplate="%{x}<br>Acuracidade: %{y:.2f}%<extra></extra>",
+    ))
+
+    # Linha Meta 95%
+    fig.add_hline(
+        y=95,
+        line_dash="dash",
+        line_color="#EC6E21",
+        line_width=1.5,
+        opacity=0.7,
+        annotation_text="Meta 95%",
+        annotation_position="right",
+        annotation_font_color="#EC6E21",
+        annotation_font_size=11,
     )
 
-    chart = (
-        alt.layer(area, line, points, meta_line, meta_text)
-        .resolve_scale(y="shared")
-        .properties(
-            height=320,
-            title=alt.TitleParams(
-                text=col_y,
-                color="#ffffff",
-                fontSize=13,
-                fontWeight="bold",
-                anchor="start",
-            ),
-        )
-        .configure_view(fill="#004550", stroke=None)
-        .configure_axis(labelColor="#a0c4cc", gridColor="#1a6672",
-                        domainColor="#007687", titleColor="#a0c4cc")
+    fig.update_layout(
+        height=320,
+        paper_bgcolor="#004550",
+        plot_bgcolor="#004550",
+        font=dict(color="#a0c4cc"),
+        margin=dict(l=60, r=80, t=30, b=40),
+        showlegend=False,
+        xaxis=dict(
+            tickformat="%Y-%m",
+            tickcolor="#007687",
+            linecolor="#007687",
+            gridcolor="#1a6672",
+            tickfont=dict(color="#a0c4cc"),
+        ),
+        yaxis=dict(
+            range=[93, 101],
+            tickvals=[93, 94, 95, 96, 97, 98, 99, 100, 101],
+            ticktext=["93%","94%","95%","96%","97%","98%","99%","100%","101%"],
+            tickcolor="#007687",
+            linecolor="#007687",
+            gridcolor="#1a6672",
+            tickfont=dict(color="#a0c4cc"),
+        ),
     )
-    st.altair_chart(chart, use_container_width=True)
+
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def _tab_resumo(dff: pd.DataFrame):

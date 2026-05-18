@@ -8,3 +8,4 @@ xlsxwriter
 reportlab
 pdfplumber==0.10.3
 fpdf2
+plotly
