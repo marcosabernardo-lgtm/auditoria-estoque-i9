@@ -286,6 +286,7 @@ def _tab_base_historica(dff: pd.DataFrame):
         df_exib.style
         .apply(_style_row, axis=1)
         .format({k: v for k, v in fmt.items() if k in df_exib.columns}, na_rep="-")
+        .hide(axis="index")
         .set_table_styles([
             {"selector": "thead th", "props": [
                 ("background-color", "#004550"), ("color", "#ffffff"),
@@ -299,14 +300,12 @@ def _tab_base_historica(dff: pd.DataFrame):
         ])
     )
 
-    col_tbl, col_btn = st.columns([5, 1])
-    with col_tbl:
-        st.dataframe(styled, use_container_width=True, height=420)
+    # Botão exportar ACIMA da tabela
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_exib.to_excel(writer, index=False)
+    col_cap, col_btn = st.columns([5, 1])
     with col_btn:
-        st.markdown("<div style='margin-top:32px;'></div>", unsafe_allow_html=True)
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df_exib.to_excel(writer, index=False)
         st.download_button(
             "📥 Exportar",
             data=output.getvalue(),
@@ -314,6 +313,8 @@ def _tab_base_historica(dff: pd.DataFrame):
             mime="application/vnd.ms-excel",
             use_container_width=True,
         )
+
+    st.dataframe(styled, use_container_width=True, height=420)
 
 
 def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
@@ -334,15 +335,16 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
         df_analise = df_analise[df_analise["Filial"] == fil_sel]
 
     df_analise = df_analise.dropna(subset=["Data Inventario"])
-    df_analise["Mes"] = df_analise["Data Inventario"].dt.to_period("M").dt.to_timestamp()
+    # Agrupa por "YYYY-MM" (string) para garantir um ponto por mês
+    df_analise["Mes_key"] = df_analise["Data Inventario"].dt.strftime("%Y-%m")
 
     grp = (
-        df_analise.groupby("Mes")
-        .apply(lambda g: pd.Series({
-            "total":   len(g),
-            "div_qtd": int((g["Qtd Divergente"] != 0).sum()),
-            "div_val": int((g["Valor Divergente"] != 0).sum()),
-        }))
+        df_analise.groupby("Mes_key", sort=True)
+        .agg(
+            total    =("Produto", "count"),
+            div_qtd  =("Qtd Divergente",   lambda s: int((s != 0).sum())),
+            div_val  =("Valor Divergente",  lambda s: int((s != 0).sum())),
+        )
         .reset_index()
     )
     grp["Acuracidade Quantidade"] = (
@@ -351,6 +353,8 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
     grp["Acuracidade Valor"] = (
         (grp["total"] - grp["div_val"]) / grp["total"] * 100
     ).round(2)
+    # Converte para datetime só para o eixo X do Altair
+    grp["Mes"] = pd.to_datetime(grp["Mes_key"] + "-01")
 
     if grp.empty:
         st.info("Sem dados suficientes para o gráfico.")
@@ -373,7 +377,8 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
         .encode(
             x=alt.X("Mes:T", title="",
                     axis=alt.Axis(format="%Y-%m", labelColor="#a0c4cc",
-                                  gridColor="#007687", domainColor="#007687")),
+                                  gridColor="#007687", domainColor="#007687",
+                                  tickCount="month")),
             y=alt.Y(f"{col_y}:Q",
                     scale=alt.Scale(domain=[y_min, y_max]),
                     title="",
@@ -381,7 +386,7 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
                                   labelColor="#a0c4cc", gridColor="#007687",
                                   domainColor="#007687")),
             tooltip=[
-                alt.Tooltip("Mes:T", title="Mês", format="%Y-%m"),
+                alt.Tooltip("Mes_key:N", title="Mês"),
                 alt.Tooltip(f"{col_y}:Q", title="Acuracidade", format=".2f"),
             ],
         )
@@ -394,7 +399,7 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
             y=alt.Y(f"{col_y}:Q", scale=alt.Scale(domain=[y_min, y_max])),
         )
     )
-    meta_df  = pd.DataFrame({"y": [95.0]})
+    meta_df   = pd.DataFrame({"y": [95.0]})
     meta_line = (
         alt.Chart(meta_df)
         .mark_rule(strokeDash=[6, 4], color="#EC6E21", opacity=0.6, strokeWidth=1.5)
