@@ -357,34 +357,33 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
         st.info("Sem dados suficientes para o gráfico.")
         return
 
-    col_y  = tipo
-    x_vals = grp["Mes_key"].tolist()
-    y_vals = grp[col_y].tolist()
+    col_y   = tipo
+    # Converte "YYYY-MM" para o primeiro dia do mês (data real para o eixo X)
+    x_dates = pd.to_datetime(grp["Mes_key"] + "-01").tolist()
+    y_vals  = grp[col_y].tolist()
 
     fig = go.Figure()
 
-    # Área preenchida
-    fig.add_trace(go.Scatter(
-        x=x_vals, y=y_vals,
-        mode="lines+markers",
-        fill="tozeroy",
-        fillcolor="rgba(42,122,90,0.45)",
-        line=dict(color="#EC6E21", width=2.5),
-        marker=dict(color="#EC6E21", size=8),
+    # Barras mensais de acuracidade
+    fig.add_trace(go.Bar(
+        x=x_dates,
+        y=y_vals,
+        marker_color="#EC6E21",
+        marker_line_width=0,
         name=col_y,
-        hovertemplate="%{x}<br>Acuracidade: %{y:.2f}%<extra></extra>",
+        hovertemplate="%{x|%Y-%m}<br>Acuracidade: %{y:.2f}%<extra></extra>",
     ))
 
-    # Linha Meta 95%
+    # Linha horizontal Meta 95%
     fig.add_hline(
         y=95,
         line_dash="dash",
-        line_color="#EC6E21",
+        line_color="#ffffff",
         line_width=1.5,
-        opacity=0.7,
+        opacity=0.6,
         annotation_text="Meta 95%",
-        annotation_position="right",
-        annotation_font_color="#EC6E21",
+        annotation_position="top right",
+        annotation_font_color="#ffffff",
         annotation_font_size=11,
     )
 
@@ -393,9 +392,11 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
         paper_bgcolor="#004550",
         plot_bgcolor="#004550",
         font=dict(color="#a0c4cc"),
-        margin=dict(l=60, r=80, t=30, b=40),
+        margin=dict(l=60, r=100, t=20, b=40),
         showlegend=False,
+        bargap=0.35,
         xaxis=dict(
+            dtick="M1",           # um tick por mês
             tickformat="%Y-%m",
             tickcolor="#007687",
             linecolor="#007687",
