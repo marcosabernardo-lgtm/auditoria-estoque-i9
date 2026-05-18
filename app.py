@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from processador_auditoria import cruzar_wms_erp
 
 # IMPORTANDO AS NOVAS ABAS
-from tabs import auditoria, indicadores, inventario_ciclico, ajustes_inventario
+from tabs import auditoria, indicadores, inventario_ciclico, ajustes_inventario, dashboard_ciclico
 
 # 1. Configuração da Página
 st.set_page_config(page_title="Gestão Integrada I9", layout="wide")
@@ -188,8 +188,11 @@ dff_jlle["Filial"] = dff_jlle["Filial"].str.split(" - ").str[-1]
 v_jlle_view = preparar_view(dff_auditoria)
 st.session_state["_engine"] = get_engine()
 
-tab1, tab2, tab3, tab4 = st.tabs(["📋 Auditoria", "📊 Indicadores", "🔄 Inv. Cíclico", "📋 Ajustes"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📋 Auditoria", "📊 Indicadores", "🔄 Inv. Cíclico", "📋 Ajustes", "📉 Dashboard Cíclico"
+])
 with tab1: auditoria.render(v_jlle_view, estilizar_tabela, para_excel)
 with tab2: indicadores.render(dff_jlle, formatar_br)
 with tab3: inventario_ciclico.render(dff_jlle, df_base, formatar_br)
 with tab4: ajustes_inventario.render(empresa_sel, filial_sel, formatar_br)
+with tab5: dashboard_ciclico.render(st.session_state["_engine"], formatar_br)
