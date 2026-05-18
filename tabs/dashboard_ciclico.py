@@ -404,7 +404,7 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
     chart = (
         (area + points + meta_line)
         .properties(height=320, background="#004550")
-        .configure_view(strokeColor="#007687")
+        .configure_view(stroke=None)
         .configure_axis(labelColor="#a0c4cc", gridColor="#007687",
                         domainColor="#007687", titleColor="#a0c4cc")
     )
