@@ -361,30 +361,41 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
         return
 
     col_y = tipo
-    y_min = 93.0
-    y_max = 101.0
 
-    st.markdown(
-        f'<div style="color:#ffffff; font-weight:700; font-size:1rem; margin:10px 0 4px;">'
-        f'{tipo}</div>',
-        unsafe_allow_html=True,
+    y_scale = alt.Scale(domain=[93.0, 101.0])
+    y_axis  = alt.Axis(
+        values=[93, 94, 95, 96, 97, 98, 99, 100, 101],
+        labelExpr="datum.value + '%'",
+        labelColor="#a0c4cc",
+        gridColor="#1a6672",
+        domainColor="#007687",
+        tickColor="#007687",
+        title="",
+    )
+    x_axis = alt.Axis(
+        format="%Y-%m",
+        tickCount="month",
+        labelColor="#a0c4cc",
+        gridColor="#1a6672",
+        domainColor="#007687",
+        tickColor="#007687",
+        title="",
     )
 
     area = (
         alt.Chart(grp)
-        .mark_area(color="#2a7a5a", opacity=0.45,
-                   line={"color": "#EC6E21", "strokeWidth": 2.5})
+        .mark_area(color="#2a7a5a", opacity=0.45)
         .encode(
-            x=alt.X("Mes:T", title="",
-                    axis=alt.Axis(format="%Y-%m", labelColor="#a0c4cc",
-                                  gridColor="#007687", domainColor="#007687",
-                                  tickCount="month")),
-            y=alt.Y(f"{col_y}:Q",
-                    scale=alt.Scale(domain=[y_min, y_max]),
-                    title="",
-                    axis=alt.Axis(labelExpr="datum.value + '%'",
-                                  labelColor="#a0c4cc", gridColor="#007687",
-                                  domainColor="#007687")),
+            x=alt.X("Mes:T", axis=x_axis),
+            y=alt.Y(f"{col_y}:Q", scale=y_scale, axis=y_axis),
+        )
+    )
+    line = (
+        alt.Chart(grp)
+        .mark_line(color="#EC6E21", strokeWidth=2.5)
+        .encode(
+            x=alt.X("Mes:T"),
+            y=alt.Y(f"{col_y}:Q", scale=y_scale),
             tooltip=[
                 alt.Tooltip("Mes_key:N", title="Mês"),
                 alt.Tooltip(f"{col_y}:Q", title="Acuracidade", format=".2f"),
@@ -395,35 +406,45 @@ def _tab_analise(df_all: pd.DataFrame, emp_sel: str, fil_sel: str):
         alt.Chart(grp)
         .mark_point(color="#EC6E21", size=70, filled=True)
         .encode(
-            x="Mes:T",
-            y=alt.Y(f"{col_y}:Q", scale=alt.Scale(domain=[y_min, y_max])),
+            x=alt.X("Mes:T"),
+            y=alt.Y(f"{col_y}:Q", scale=y_scale),
         )
     )
     meta_df   = pd.DataFrame({"y": [95.0]})
     meta_line = (
         alt.Chart(meta_df)
-        .mark_rule(strokeDash=[6, 4], color="#EC6E21", opacity=0.6, strokeWidth=1.5)
-        .encode(y="y:Q")
+        .mark_rule(strokeDash=[6, 4], color="#EC6E21", opacity=0.7, strokeWidth=1.5)
+        .encode(y=alt.Y("y:Q", scale=y_scale))
+    )
+    meta_text = (
+        alt.Chart(meta_df)
+        .mark_text(align="left", color="#EC6E21", opacity=0.9,
+                   fontSize=10, dx=4, dy=-4)
+        .encode(
+            y=alt.Y("y:Q", scale=y_scale),
+            x=alt.value(0),
+            text=alt.value("Meta 95%"),
+        )
     )
 
     chart = (
-        (area + points + meta_line)
-        .properties(height=320, background="#004550")
-        .configure_view(stroke=None)
-        .configure_axis(labelColor="#a0c4cc", gridColor="#007687",
+        alt.layer(area, line, points, meta_line, meta_text)
+        .resolve_scale(y="shared")
+        .properties(
+            height=320,
+            title=alt.TitleParams(
+                text=col_y,
+                color="#ffffff",
+                fontSize=13,
+                fontWeight="bold",
+                anchor="start",
+            ),
+        )
+        .configure_view(fill="#004550", stroke=None)
+        .configure_axis(labelColor="#a0c4cc", gridColor="#1a6672",
                         domainColor="#007687", titleColor="#a0c4cc")
     )
     st.altair_chart(chart, use_container_width=True)
-
-    # Legenda Meta
-    st.markdown(
-        '<div style="display:flex; align-items:center; gap:8px; margin-top:-4px;">'
-        '<svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" '
-        'stroke="#EC6E21" stroke-width="1.5" stroke-dasharray="5,3"/></svg>'
-        '<span style="color:#EC6E21; font-size:0.78rem;">Meta 95%</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
 
 
 def _tab_resumo(dff: pd.DataFrame):
